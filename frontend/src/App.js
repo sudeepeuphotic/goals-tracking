@@ -1,54 +1,62 @@
-import { useEffect } from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { Toaster } from "sonner";
+import { AuthProvider, useAuth } from "@/context/AuthContext";
+import Login from "@/pages/Login";
+import AppShell from "@/components/AppShell";
+import Dashboard from "@/pages/Dashboard";
+import Cycles from "@/pages/Cycles";
+import ObjectiveDetail from "@/pages/ObjectiveDetail";
+import MyPlan from "@/pages/MyPlan";
+import WeeklyUpdatePage from "@/pages/WeeklyUpdatePage";
+import Reflection from "@/pages/Reflection";
+import DRIFeedbackPage from "@/pages/DRIFeedbackPage";
+import ManagerReview from "@/pages/ManagerReview";
+import AdminUsers from "@/pages/AdminUsers";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+function Protected({ children }) {
+  const { user } = useAuth();
+  if (user === null) return <div className="p-10 mono-label">Loading…</div>;
+  if (!user) return <Navigate to="/login" replace />;
+  return children;
+}
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
+function AppRoutes() {
   return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
-
-function App() {
-  return (
-    <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </div>
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route
+        path="/"
+        element={
+          <Protected>
+            <AppShell />
+          </Protected>
+        }
+      >
+        <Route index element={<Dashboard />} />
+        <Route path="cycles" element={<Cycles />} />
+        <Route path="objectives/:id" element={<ObjectiveDetail />} />
+        <Route path="my-plan" element={<MyPlan />} />
+        <Route path="weekly" element={<WeeklyUpdatePage />} />
+        <Route path="reflection" element={<Reflection />} />
+        <Route path="feedback" element={<DRIFeedbackPage />} />
+        <Route path="manager" element={<ManagerReview />} />
+        <Route path="admin/users" element={<AdminUsers />} />
+      </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <AuthProvider>
+      <BrowserRouter>
+        <div className="App">
+          <AppRoutes />
+          <Toaster position="top-right" theme="light" />
+        </div>
+      </BrowserRouter>
+    </AuthProvider>
+  );
+}
