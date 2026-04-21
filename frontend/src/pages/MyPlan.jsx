@@ -24,6 +24,7 @@ export default function MyPlan() {
 
   const [objectives, setObjectives] = useState([]);
   const [users, setUsers] = useState([]);
+  const [manageable, setManageable] = useState([]);
   const [plans, setPlans] = useState([]);
   const [activeId, setActiveId] = useState("");
   const [actingAs, setActingAs] = useState(user.id);
@@ -31,14 +32,16 @@ export default function MyPlan() {
   const [saving, setSaving] = useState(false);
 
   const load = async () => {
-    const [ob, pl, us] = await Promise.all([
+    const [ob, pl, us, mg] = await Promise.all([
       api.get("/objectives"),
       api.get("/plans"),
       api.get("/users"),
+      api.get("/users/manageable"),
     ]);
     setObjectives(ob.data);
     setPlans(pl.data);
     setUsers(us.data);
+    setManageable(mg.data);
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
