@@ -51,19 +51,19 @@ def admin():
 
 @pytest.fixture(scope="session")
 def manager():
-    return _login(os.environ.get("TEST_MANAGER_EMAIL", "manager@nosh.io"),
+    return _login(os.environ.get("TEST_MANAGER_EMAIL", "manager@noshrobotics.co"),
                   os.environ.get("TEST_USER_PW", ""))
 
 
 @pytest.fixture(scope="session")
 def dri():
-    return _login(os.environ.get("TEST_DRI_EMAIL", "dri@nosh.io"),
+    return _login(os.environ.get("TEST_DRI_EMAIL", "dri@noshrobotics.co"),
                   os.environ.get("TEST_USER_PW", ""))
 
 
 @pytest.fixture(scope="session")
 def alice():
-    return _login(os.environ.get("TEST_ALICE_EMAIL", "alice@nosh.io"),
+    return _login(os.environ.get("TEST_ALICE_EMAIL", "alice@noshrobotics.co"),
                   os.environ.get("TEST_USER_PW", ""))
 
 
@@ -95,7 +95,7 @@ class TestAIRefactor:
     def test_ai_evaluate_forbidden_for_contributor(self, alice, admin):
         objs = admin.get(f"{API}/objectives", timeout=20).json()
         users = admin.get(f"{API}/users", timeout=20).json()
-        alice_id = next(u["id"] for u in users if u["email"] == "alice@nosh.io")
+        alice_id = next(u["id"] for u in users if u["email"] == "alice@noshrobotics.co")
         r = alice.post(
             f"{API}/ai/evaluate-individual",
             params={"user_id": alice_id, "objective_id": objs[0]["id"]},
@@ -114,7 +114,7 @@ class TestAIRefactor:
 class TestBruteForceXFF:
     def test_six_fails_on_nonexistent_email_locks_out(self):
         ts = int(time.time())
-        ghost = f"nobody_{ts}_{uuid.uuid4().hex[:6]}@nosh.io"
+        ghost = f"nobody_{ts}_{uuid.uuid4().hex[:6]}@noshrobotics.co"
         mongo.login_attempts.delete_many({"identifier": {"$regex": re.escape(ghost)}})
         s = requests.Session()
         try:
@@ -137,7 +137,7 @@ class TestDRISelfView:
         assert r.status_code == 200, r.text
         data = r.json()
         assert isinstance(data, list), "response should be a list"
-        assert len(data) >= 1, "dri@nosh.io should DRI at least one objective"
+        assert len(data) >= 1, "dri@noshrobotics.co should DRI at least one objective"
         # Find the objective that has feedback (count > 0)
         with_fb = [row for row in data if row.get("count", 0) > 0]
         assert with_fb, "expected at least one objective with feedback"
@@ -184,13 +184,13 @@ class TestForgotPasswordFallback:
         # truncate backend log position marker
         r = requests.post(
             f"{API}/auth/forgot-password",
-            json={"email": "admin@nosh.io"},
+            json={"email": "admin@noshrobotics.co"},
             timeout=20,
         )
         assert r.status_code == 200
         assert r.json().get("ok") is True
         # verify token was created in mongo
-        user = mongo.users.find_one({"email": "admin@nosh.io"})
+        user = mongo.users.find_one({"email": "admin@noshrobotics.co"})
         tok = mongo.password_reset_tokens.find_one(
             {"user_id": user["id"], "used": False}, sort=[("created_at", -1)])
         assert tok, "reset token should be persisted"

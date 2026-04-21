@@ -723,7 +723,7 @@ async def root():
 # ============ SEED ============
 async def seed_if_empty():
     # ensure admin
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@nosh.io")
+    admin_email = os.environ.get("ADMIN_EMAIL", "admin@noshrobotics.co")
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
     existing_admin = await db.users.find_one({"email": admin_email})
     if not existing_admin:
@@ -739,10 +739,10 @@ async def seed_if_empty():
 
     # demo users (idempotent)
     demo = [
-        ("manager@nosh.io", "password123", "Morgan Lee", "manager"),
-        ("dri@nosh.io", "password123", "Dana Rao", "dri"),
-        ("alice@nosh.io", "password123", "Alice Chen", "contributor"),
-        ("bob@nosh.io", "password123", "Bob Singh", "contributor"),
+        ("manager@noshrobotics.co", "password123", "Morgan Lee", "manager"),
+        ("dri@noshrobotics.co", "password123", "Dana Rao", "dri"),
+        ("alice@noshrobotics.co", "password123", "Alice Chen", "contributor"),
+        ("bob@noshrobotics.co", "password123", "Bob Singh", "contributor"),
     ]
     user_ids = {}
     for email, pw, name, role in demo:
@@ -768,9 +768,9 @@ async def seed_if_empty():
             "status": "active",
             "created_at": now_utc(),
         })
-        dri_id = user_ids["dri@nosh.io"]
-        alice = user_ids["alice@nosh.io"]
-        bob = user_ids["bob@nosh.io"]
+        dri_id = user_ids["dri@noshrobotics.co"]
+        alice = user_ids["alice@noshrobotics.co"]
+        bob = user_ids["bob@noshrobotics.co"]
 
         obj1_id = str(uuid.uuid4())
         await db.objectives.insert_one({

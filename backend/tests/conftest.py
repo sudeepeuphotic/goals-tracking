@@ -9,8 +9,8 @@ import requests
 #   TEST_ADMIN_EMAIL, TEST_ADMIN_PW, TEST_USER_PW,
 #   TEST_MANAGER_EMAIL, TEST_DRI_EMAIL, TEST_ALICE_EMAIL, TEST_BOB_EMAIL
 _DEFAULT_EMAILS = {
-    "admin": "admin@nosh.io", "manager": "manager@nosh.io",
-    "dri": "dri@nosh.io", "alice": "alice@nosh.io", "bob": "bob@nosh.io",
+    "admin": "admin@noshrobotics.co", "manager": "manager@noshrobotics.co",
+    "dri": "dri@noshrobotics.co", "alice": "alice@noshrobotics.co", "bob": "bob@noshrobotics.co",
 }
 
 TEST_ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL") or os.environ.get("ADMIN_EMAIL") or _DEFAULT_EMAILS["admin"]

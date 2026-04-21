@@ -50,13 +50,13 @@ def admin():
 
 @pytest.fixture(scope="session")
 def manager():
-    return _login(os.environ.get("TEST_MANAGER_EMAIL", "manager@nosh.io"),
+    return _login(os.environ.get("TEST_MANAGER_EMAIL", "manager@noshrobotics.co"),
                   os.environ.get("TEST_USER_PW", ""))
 
 
 @pytest.fixture(scope="session")
 def alice():
-    return _login(os.environ.get("TEST_ALICE_EMAIL", "alice@nosh.io"),
+    return _login(os.environ.get("TEST_ALICE_EMAIL", "alice@noshrobotics.co"),
                   os.environ.get("TEST_USER_PW", ""))
 
 
@@ -79,7 +79,7 @@ def first_objective(admin):
 class TestBruteForce:
     def test_lockout_after_5_failures_and_clear_on_success(self):
         # Use a unique test email to avoid locking real users
-        test_email = f"bruteforce_{uuid.uuid4().hex[:8]}@nosh.io"
+        test_email = f"bruteforce_{uuid.uuid4().hex[:8]}@noshrobotics.co"
         # We need a real user so we can test "clear on success" too.
         # Use alice's email BUT first clear attempts; then after 5 fails try 6th is 429.
         # To avoid polluting alice, use a brand-new account.
@@ -139,12 +139,12 @@ class TestBruteForce:
 class TestPasswordReset:
     def test_forgot_password_existing_user_creates_token(self):
         r = requests.post(f"{API}/auth/forgot-password",
-                          json={"email": "alice@nosh.io"}, timeout=20)
+                          json={"email": "alice@noshrobotics.co"}, timeout=20)
         assert r.status_code == 200
         data = r.json()
         assert data.get("ok") is True
         # verify token persisted in mongo
-        user = mongo.users.find_one({"email": "alice@nosh.io"})
+        user = mongo.users.find_one({"email": "alice@noshrobotics.co"})
         tok_doc = mongo.password_reset_tokens.find_one(
             {"user_id": user["id"], "used": False}, sort=[("created_at", -1)])
         assert tok_doc is not None
@@ -152,7 +152,7 @@ class TestPasswordReset:
 
     def test_forgot_password_nonexistent_email_no_leak(self):
         r = requests.post(f"{API}/auth/forgot-password",
-                          json={"email": "nobody_xyz_404@nosh.io"}, timeout=20)
+                          json={"email": "nobody_xyz_404@noshrobotics.co"}, timeout=20)
         # must be 200 to avoid leaking existence
         assert r.status_code == 200
         assert r.json().get("ok") is True
@@ -162,7 +162,7 @@ class TestPasswordReset:
     def test_reset_password_valid_token_then_reuse_rejected(self):
         # create a throwaway user
         admin_s = _login(os.environ.get("TEST_ADMIN_EMAIL") or os.environ.get("ADMIN_EMAIL", ""), os.environ.get("TEST_ADMIN_PW") or os.environ.get("ADMIN_PASSWORD", ""))
-        email = f"reset_{uuid.uuid4().hex[:8]}@nosh.io"
+        email = f"reset_{uuid.uuid4().hex[:8]}@noshrobotics.co"
         old_pw = "Old-" + uuid.uuid4().hex[:12]
         new_pw = "New-" + uuid.uuid4().hex[:12]
         r = admin_s.post(f"{API}/users", json={
@@ -214,7 +214,7 @@ class TestPasswordReset:
     def test_reset_password_expired_token(self):
         # insert a manually expired token for an existing user
         from datetime import datetime, timezone, timedelta
-        user = mongo.users.find_one({"email": "bob@nosh.io"})
+        user = mongo.users.find_one({"email": "bob@noshrobotics.co"})
         expired_tok = f"expired_{uuid.uuid4().hex}"
         mongo.password_reset_tokens.insert_one({
             "id": str(uuid.uuid4()),
@@ -297,7 +297,7 @@ class TestAI:
         assert 1 <= out["tentative_dri_score"] <= 5
 
     def test_ai_evaluate_individual_as_manager(self, manager, first_objective, users_by_email):
-        alice_id = users_by_email["alice@nosh.io"]["id"]
+        alice_id = users_by_email["alice@noshrobotics.co"]["id"]
         r = manager.post(
             f"{API}/ai/evaluate-individual",
             params={"user_id": alice_id, "objective_id": first_objective["id"]},
@@ -315,7 +315,7 @@ class TestAI:
         assert 1 <= out["tentative_score"] <= 5
 
     def test_ai_evaluate_forbidden_for_contributor(self, alice, first_objective, users_by_email):
-        alice_id = users_by_email["alice@nosh.io"]["id"]
+        alice_id = users_by_email["alice@noshrobotics.co"]["id"]
         r = alice.post(
             f"{API}/ai/evaluate-individual",
             params={"user_id": alice_id, "objective_id": first_objective["id"]},

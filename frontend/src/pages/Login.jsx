@@ -13,7 +13,7 @@ import { toast } from "sonner";
 export default function Login() {
   const { user, login } = useAuth();
   const nav = useNavigate();
-  const [email, setEmail] = useState("admin@nosh.io");
+  const [email, setEmail] = useState("admin@noshrobotics.co");
   const [password, setPassword] = useState("admin123");
   const [submitting, setSubmitting] = useState(false);
   const [fpOpen, setFpOpen] = useState(false);
@@ -93,10 +93,10 @@ export default function Login() {
           </div>
 
           <div className="mt-6 text-xs text-[var(--ink-soft)] space-y-1 font-mono">
-            <div>admin@nosh.io / admin123</div>
-            <div>manager@nosh.io / password123</div>
-            <div>dri@nosh.io / password123</div>
-            <div>alice@nosh.io / password123</div>
+            <div>admin@noshrobotics.co / admin123</div>
+            <div>manager@noshrobotics.co / password123</div>
+            <div>dri@noshrobotics.co / password123</div>
+            <div>alice@noshrobotics.co / password123</div>
           </div>
         </form>
       </div>

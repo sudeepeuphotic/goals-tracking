@@ -40,25 +40,25 @@ def admin():
 
 @pytest.fixture(scope="session")
 def manager():
-    return _session(os.environ.get("TEST_MANAGER_EMAIL", "manager@nosh.io"),
+    return _session(os.environ.get("TEST_MANAGER_EMAIL", "manager@noshrobotics.co"),
                     os.environ.get("TEST_USER_PW", ""))
 
 
 @pytest.fixture(scope="session")
 def dri():
-    return _session(os.environ.get("TEST_DRI_EMAIL", "dri@nosh.io"),
+    return _session(os.environ.get("TEST_DRI_EMAIL", "dri@noshrobotics.co"),
                     os.environ.get("TEST_USER_PW", ""))
 
 
 @pytest.fixture(scope="session")
 def alice():
-    return _session(os.environ.get("TEST_ALICE_EMAIL", "alice@nosh.io"),
+    return _session(os.environ.get("TEST_ALICE_EMAIL", "alice@noshrobotics.co"),
                     os.environ.get("TEST_USER_PW", ""))
 
 
 @pytest.fixture(scope="session")
 def bob():
-    return _session(os.environ.get("TEST_BOB_EMAIL", "bob@nosh.io"),
+    return _session(os.environ.get("TEST_BOB_EMAIL", "bob@noshrobotics.co"),
                     os.environ.get("TEST_USER_PW", ""))
 
 
@@ -107,7 +107,7 @@ def test_login_sets_cookies_and_returns_user():
                timeout=20)
     assert r.status_code == 200
     data = r.json()
-    assert data["email"] == "admin@nosh.io"
+    assert data["email"] == "admin@noshrobotics.co"
     assert data["role"] == "admin"
     assert "password_hash" not in data
     assert "_id" not in data
@@ -118,14 +118,14 @@ def test_login_sets_cookies_and_returns_user():
 
 
 def test_login_invalid_credentials():
-    r = requests.post(f"{API}/auth/login", json={"email": "admin@nosh.io", "password": "WRONG"}, timeout=20)
+    r = requests.post(f"{API}/auth/login", json={"email": "admin@noshrobotics.co", "password": "WRONG"}, timeout=20)
     assert r.status_code == 401
 
 
 def test_auth_me(admin):
     r = admin.get(f"{API}/auth/me", timeout=20)
     assert r.status_code == 200
-    assert r.json()["email"] == "admin@nosh.io"
+    assert r.json()["email"] == "admin@noshrobotics.co"
 
 
 def test_auth_me_requires_cookie():
@@ -134,7 +134,7 @@ def test_auth_me_requires_cookie():
 
 
 def test_logout_clears_cookies():
-    s = _session(os.environ.get("TEST_BOB_EMAIL", "bob@nosh.io"),
+    s = _session(os.environ.get("TEST_BOB_EMAIL", "bob@noshrobotics.co"),
                  os.environ.get("TEST_USER_PW", ""))
     r = s.post(f"{API}/auth/logout", timeout=20)
     assert r.status_code == 200
@@ -180,8 +180,8 @@ def test_list_objectives_by_cycle(alice, seeded_cycle):
 
 
 def test_create_objective_admin(admin, seeded_cycle, users_by_email):
-    dri_id = users_by_email["dri@nosh.io"]["id"]
-    alice_id = users_by_email["alice@nosh.io"]["id"]
+    dri_id = users_by_email["dri@noshrobotics.co"]["id"]
+    alice_id = users_by_email["alice@noshrobotics.co"]["id"]
     payload = {
         "cycle_id": seeded_cycle["id"],
         "title": f"TEST_obj_{uuid.uuid4().hex[:6]}",
@@ -206,7 +206,7 @@ def test_create_objective_admin(admin, seeded_cycle, users_by_email):
 def test_create_objective_forbidden_for_contributor(alice, seeded_cycle, users_by_email):
     r = alice.post(f"{API}/objectives",
                    json={"cycle_id": seeded_cycle["id"], "title": "x", "description": "x",
-                         "dri_id": users_by_email["dri@nosh.io"]["id"], "success_metric": "m"},
+                         "dri_id": users_by_email["dri@noshrobotics.co"]["id"], "success_metric": "m"},
                    timeout=20)
     assert r.status_code == 403
 
@@ -341,7 +341,7 @@ def test_feedback_summary_aggregates(alice, bob, seeded_objectives):
 
 # ---------- Manager review ----------
 def test_manager_review_upsert(manager, seeded_cycle, users_by_email):
-    alice_id = users_by_email["alice@nosh.io"]["id"]
+    alice_id = users_by_email["alice@noshrobotics.co"]["id"]
     payload = {"subject_type": "individual", "subject_id": alice_id,
                "cycle_id": seeded_cycle["id"], "final_evaluation": "TEST eval",
                "optional_score": 4, "disagreement_note_vs_ai": ""}
@@ -357,7 +357,7 @@ def test_manager_review_upsert(manager, seeded_cycle, users_by_email):
 
 
 def test_manager_review_forbidden_for_contributor(alice, seeded_cycle, users_by_email):
-    payload = {"subject_type": "individual", "subject_id": users_by_email["alice@nosh.io"]["id"],
+    payload = {"subject_type": "individual", "subject_id": users_by_email["alice@noshrobotics.co"]["id"],
                "cycle_id": seeded_cycle["id"], "final_evaluation": "nope"}
     r = alice.post(f"{API}/manager-review", json=payload, timeout=20)
     assert r.status_code == 403
