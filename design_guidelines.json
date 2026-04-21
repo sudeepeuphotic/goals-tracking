@@ -1,0 +1,103 @@
+{
+  "theme": "light",
+  "archetype": "4 (Swiss & High-Contrast)",
+  "design_philosophy": "IDE-inspired / Editorial SaaS. Optimize for speed, low-friction, and data clarity. Distinctive non-generic aesthetic avoiding 'AI slop'.",
+  "colors": {
+    "background": "#F7F7F5",
+    "surface": "#FFFFFF",
+    "surface_hover": "#F0F0EE",
+    "text_primary": "#0A0A0A",
+    "text_secondary": "#525252",
+    "border": "#E5E5E0",
+    "border_focus": "#0A0A0A",
+    "primary": "#0A0A0A",
+    "primary_foreground": "#FFFFFF",
+    "traffic_light": {
+      "green": "#00C853",
+      "yellow": "#FFD600",
+      "red": "#FF3D00"
+    },
+    "accent": "#0055FF"
+  },
+  "typography": {
+    "fonts": {
+      "heading": "Cabinet Grotesk",
+      "body": "IBM Plex Sans",
+      "mono": "IBM Plex Mono"
+    },
+    "scales": {
+      "h1": "text-4xl tracking-tighter font-medium",
+      "h2": "text-2xl tracking-tight font-medium",
+      "h3": "text-lg tracking-tight font-medium",
+      "body": "text-base leading-relaxed",
+      "mono_label": "text-xs font-mono uppercase tracking-[0.1em]"
+    }
+  },
+  "spacing_and_layout": {
+    "container_padding": "p-6 md:p-8",
+    "gap_standard": "gap-6",
+    "radius": "rounded-none",
+    "border_style": "border border-black/10",
+    "shadow_style": "shadow-[4px_4px_0px_rgba(10,10,10,1)]",
+    "shadow_hover": "shadow-[2px_2px_0px_rgba(10,10,10,1)] translate-y-[2px] translate-x-[2px]"
+  },
+  "component_patterns": {
+    "dashboard_cards": {
+      "appearance": "Flat, sharp-edged rectangles (rounded-none). 1px solid border. Raw structural layout.",
+      "hover_state": "Slight push down effect with sharp shadow adjustments to mimic mechanical keys.",
+      "layout": "Grid borders pattern, exposing the skeleton. Use subgrid where possible."
+    },
+    "weekly_update_widget": {
+      "layout": "Compact inline row, designed for speed (<3 min input).",
+      "traffic_light": "Three sharp square toggles (Green, Yellow, Red). Active state fills with solid color, inactive is grayscale/outlined.",
+      "timestamp": "IBM Plex Mono, right-aligned, text-xs text-secondary."
+    },
+    "sectioned_reflection_form": {
+      "header": "Heavy border-b-2 border-black, thick tracking on titles.",
+      "inputs": "Shadcn highly customized. No soft focus rings. 1px black border on focus, sharp corners. bg-white inside gray background."
+    },
+    "dri_feedback_radio_groups": {
+      "appearance": "Segmented controls resembling IDE toggle groups. 1px border, connected buttons. Active item inverts to black background with white text."
+    },
+    "manager_review_tabs": {
+      "appearance": "Boxy, stark tabs. No floating pills. Active tab has a heavy bottom border (e.g. border-b-2 border-black) or full inversion (bg-black text-white)."
+    },
+    "empty_states": {
+      "appearance": "Minimalist monochrome. Use ASCII art or CSS repeating-linear-gradient scanlines instead of generic vector illustrations."
+    },
+    "ai_panel_placeholder": {
+      "appearance": "Distinguished by a subtle background texture (e.g., repeating diagonal lines or noise) and a monospaced 'AI_ANALYSIS_PENDING' header."
+    }
+  },
+  "motion": {
+    "transitions": "transition-all duration-100 ease-out",
+    "hover_effects": "Mechanical and snappy. No long fades."
+  },
+  "icons": {
+    "library": "Phosphor Icons",
+    "install_command": "yarn add @phosphor-icons/react",
+    "style": "duotone or bold, matching the brutalist weight."
+  },
+  "media": {
+    "image_urls": {
+      "avatars": [
+        "https://images.unsplash.com/photo-1632255658477-9ac8f313ea41?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1OTN8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBvZmZpY2UlMjBwb3J0cmFpdHxlbnwwfHx8fDE3NzY3NTAwNTl8MA&ixlib=rb-4.1.0&q=85",
+        "https://images.unsplash.com/photo-1632255657991-ce622acebecd?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1OTN8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBvZmZpY2UlMjBwb3J0cmFpdHxlbnwwfHx8fDE3NzY3NTAwNTl8MA&ixlib=rb-4.1.0&q=85",
+        "https://images.pexels.com/photos/30614308/pexels-photo-30614308.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940"
+      ]
+    }
+  },
+  "accessibility_and_testing": {
+    "contrast": "Ensure minimum 4.5:1 for body, 3:1 for large text.",
+    "testing_attributes": "All interactive elements MUST include data-testid (e.g., data-testid='submit-weekly-update-button')."
+  },
+  "instructions_to_main_agent": [
+    "DO NOT use generic purple/violet 'AI slop' gradients.",
+    "Rely heavily on HTML/Tailwind for structural layout (grid, flex) and heavily customize Shadcn components to remove rounded corners (use rounded-none).",
+    "For the traffic light widget, use the specific colors defined in the colors.traffic_light object.",
+    "Use Phosphor icons. Keep the design extremely utilitarian, mimicking a high-end code editor or Bloomberg terminal.",
+    "Ensure the manager review tabs look like strict folder tabs, with the active state clearly differentiated by stark black/white inversion.",
+    "Incorporate the provided avatar images for team members, DRI, and contributors.",
+    "Implement data-testid on every clickable or interactable element."
+  ]
+}
