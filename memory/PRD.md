@@ -53,6 +53,11 @@ tool to run 3-month execution cycles.
 - **Privacy-scoped /api/users** — Admin/manager get full fields; contributors get only `{id, name, role}`.
 - **AI evaluator (Gemini 3 Flash)** — Live, manager/admin-only. `POST /api/ai/evaluate-individual` and `POST /api/ai/evaluate-objective`. Uses `google-genai` SDK with `response_mime_type=application/json` + strict JSON schema. Feature-flagged via `AI_ENABLED` + `GOOGLE_API_KEY` + `AI_MODEL`. `AIPanel` component handles run/re-run, caching last eval, and compact display (exec summary, strength/risk signals, leadership grid, mismatch, execution risks, tentative score). Integrated on Dashboard (self-view for managers), Objective Detail AI tab, and Manager Review AI tab.
 
+## Iteration 3 — 2026-02-21
+- **AI module split** — Extracted AI logic to `/app/backend/ai/__init__.py` using a `build_ai_router(db, require_role, get_current_user, now_utc)` factory. `server.py` trimmed by ~170 lines; all `/api/ai/*` endpoints unchanged externally.
+- **DRI self-view of feedback** — New `GET /api/feedback/my-dri-view` returns, per objective the caller DRIs: dimension averages (6-dim) + anonymized `what_worked` / `what_should_improve` quotes (no `user_id` attribution). New `/my-feedback` page with green/red quote bars. Sidebar link appears only for users who actually DRI something.
+- **Email-delivered reset links (Resend)** — `/app/backend/email_utils.py` with graceful fallback: if `RESEND_API_KEY` is unset/invalid, falls back to `[EMAIL_FALLBACK]` console logging (current state since no key was provided). `forgot-password` now sends a styled HTML reset email. Set `RESEND_API_KEY` + `SENDER_EMAIL` in `.env` and restart backend to go live.
+
 ## Backlog (prioritised)
 - **P0** AI evaluation layer — Gemini 3 Flash (configurable; skippable). Generates executive summary, strength/risk signals, leadership signals, tentative score, manager-attention points. Manager-only.
 - **P1** Feedback anonymisation / summary view for the DRI themselves (v1 shows aggregate only to manager/admin).

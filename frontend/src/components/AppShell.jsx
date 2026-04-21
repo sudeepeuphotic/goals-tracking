@@ -1,4 +1,5 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import {
   LayoutDashboard, Target, FileText, MessageSquare, Sparkles,
@@ -21,6 +22,20 @@ function NavItem({ to, icon: Icon, label, testId }) {
 export default function AppShell() {
   const { user, logout } = useAuth();
   const nav = useNavigate();
+  const [isDri, setIsDri] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const r = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/objectives`, { credentials: "include" });
+        if (!r.ok) return;
+        const objs = await r.json();
+        setIsDri(objs.some(o => o.dri_id === user.id));
+      } catch (_e) { /* ignore */ }
+    })();
+  }, [user]);
+
   if (!user) return null;
 
   const role = user.role;
@@ -48,7 +63,7 @@ export default function AppShell() {
           <NavItem to="/weekly" icon={Gauge} label="Weekly Update" testId="nav-weekly" />
           <NavItem to="/reflection" icon={BookOpen} label="Reflection" testId="nav-reflection" />
           <NavItem to="/feedback" icon={MessageSquare} label="DRI Feedback" testId="nav-feedback" />
-          <NavItem to="/my-feedback" icon={Inbox} label="My Feedback" testId="nav-my-feedback" />
+          {isDri && <NavItem to="/my-feedback" icon={Inbox} label="My Feedback" testId="nav-my-feedback" />}
 
           <div className="mono-label px-3 pt-5 pb-2">TEAM</div>
           <NavItem to="/cycles" icon={Sparkles} label="Cycles & Objectives" testId="nav-cycles" />
