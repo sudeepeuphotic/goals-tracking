@@ -65,9 +65,9 @@ def create_refresh_token(user_id: str) -> str:
 
 
 def set_auth_cookies(response: Response, access: str, refresh: str):
-    response.set_cookie("access_token", access, httponly=True, secure=True, samesite="none",
+    response.set_cookie("access_token", access, httponly=True, secure=True, samesite="lax",
                         max_age=43200, path="/")
-    response.set_cookie("refresh_token", refresh, httponly=True, secure=True, samesite="none",
+    response.set_cookie("refresh_token", refresh, httponly=True, secure=True, samesite="lax",
                         max_age=604800, path="/")
 
 
@@ -378,7 +378,7 @@ async def refresh_token(request: Request, response: Response):
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         access = create_access_token(user["id"], user["email"])
-        response.set_cookie("access_token", access, httponly=True, secure=True, samesite="none",
+        response.set_cookie("access_token", access, httponly=True, secure=True, samesite="lax",
                             max_age=43200, path="/")
         return {"ok": True}
     except jwt.InvalidTokenError:
