@@ -2,7 +2,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import {
   LayoutDashboard, Target, FileText, MessageSquare, Sparkles,
-  Users, LogOut, BookOpen, Gauge
+  Users, LogOut, BookOpen, Gauge, Inbox
 } from "lucide-react";
 
 function NavItem({ to, icon: Icon, label, testId }) {
@@ -48,6 +48,7 @@ export default function AppShell() {
           <NavItem to="/weekly" icon={Gauge} label="Weekly Update" testId="nav-weekly" />
           <NavItem to="/reflection" icon={BookOpen} label="Reflection" testId="nav-reflection" />
           <NavItem to="/feedback" icon={MessageSquare} label="DRI Feedback" testId="nav-feedback" />
+          <NavItem to="/my-feedback" icon={Inbox} label="My Feedback" testId="nav-my-feedback" />
 
           <div className="mono-label px-3 pt-5 pb-2">TEAM</div>
           <NavItem to="/cycles" icon={Sparkles} label="Cycles & Objectives" testId="nav-cycles" />

@@ -9,7 +9,6 @@ import uuid
 import logging
 import bcrypt
 import jwt
-import json
 import secrets
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal
@@ -19,12 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
 
-try:
-    from google import genai
-    from google.genai import types as genai_types
-    GENAI_AVAILABLE = True
-except Exception:
-    GENAI_AVAILABLE = False
+from ai import build_ai_router
+from email_utils import send_email, password_reset_html
 
 
 # ============ CONFIG ============
@@ -36,20 +31,10 @@ db = client[db_name]
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALGORITHM = "HS256"
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
-GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY', '')
-AI_ENABLED = os.environ.get('AI_ENABLED', 'false').lower() == 'true'
-AI_MODEL = os.environ.get('AI_MODEL', 'gemini-3-flash-preview')
 
 # Brute force config
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
-
-_ai_client = None
-def get_ai_client():
-    global _ai_client
-    if _ai_client is None and AI_ENABLED and GENAI_AVAILABLE and GOOGLE_API_KEY:
-        _ai_client = genai.Client(api_key=GOOGLE_API_KEY)
-    return _ai_client
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -347,7 +332,9 @@ async def forgot_password(payload: ForgotPasswordPayload):
             "created_at": now_utc(),
         })
         reset_link = f"{FRONTEND_URL}/reset-password?token={token}"
-        logger.info(f"[PASSWORD_RESET] email={email} link={reset_link}")
+        html = password_reset_html(user.get("name", ""), reset_link)
+        result = await send_email(email, "Reset your Nosh password", html)
+        logger.info(f"[PASSWORD_RESET] email={email} link={reset_link} sent={result.get('sent')}")
     return {"ok": True, "message": "If an account exists, a reset link has been sent."}
 
 
@@ -642,6 +629,37 @@ async def feedback_summary(objective_id: str, user: dict = Depends(get_current_u
     return summary
 
 
+@api.get("/feedback/my-dri-view")
+async def feedback_dri_self_view(user: dict = Depends(get_current_user)):
+    """Aggregated view of feedback for the calling user's DRI'd objectives.
+    Returns dimension averages + anonymized qualitative quotes. Safe for DRIs."""
+    objectives = await db.objectives.find({"dri_id": user["id"]}, {"_id": 0}).to_list(200)
+    dims = ["clarity", "alignment", "unblocking", "decision_making", "quality_bar", "trajectory_impact"]
+    score_map = {"excellent": 4, "good": 3, "okay": 2, "poor": 1}
+    out = []
+    for obj in objectives:
+        items = await db.feedback.find({"objective_id": obj["id"]},
+                                       {"_id": 0, "user_id": 0}).to_list(500)
+        dim_stats = {}
+        for d in dims:
+            vals = [score_map.get(i.get(d), 0) for i in items if i.get(d)]
+            dim_stats[d] = {
+                "avg": round(sum(vals) / len(vals), 2) if vals else 0,
+                "distribution": {opt: sum(1 for i in items if i.get(d) == opt) for opt in ENUM_OPTIONS},
+            }
+        quotes_worked = [i["what_worked"] for i in items if i.get("what_worked")]
+        quotes_improve = [i["what_should_improve"] for i in items if i.get("what_should_improve")]
+        out.append({
+            "objective": {k: obj.get(k) for k in ["id", "title", "description",
+                                                   "success_metric", "current_value", "target_value"]},
+            "count": len(items),
+            "dimensions": dim_stats,
+            "what_worked": quotes_worked,
+            "what_should_improve": quotes_improve,
+        })
+    return out
+
+
 @api.post("/feedback")
 async def submit_feedback(payload: DRIFeedbackPayload, user: dict = Depends(get_current_user)):
     obj = await db.objectives.find_one({"id": payload.objective_id})
@@ -694,174 +712,6 @@ async def upsert_manager_review(payload: ManagerReviewPayload,
     await db.manager_reviews.insert_one(doc)
     doc.pop("_id", None)
     return doc
-
-
-# ---------- AI EVALUATOR (Gemini 3 Flash) ----------
-AI_INDIVIDUAL_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "executive_summary": {"type": "string"},
-        "strength_signals": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
-        "risk_signals": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
-        "evidence_gaps": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
-        "tentative_score": {"type": "integer", "minimum": 1, "maximum": 5},
-        "manager_attention_points": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
-        "verify_this": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
-    },
-    "required": ["executive_summary", "strength_signals", "risk_signals",
-                 "tentative_score", "manager_attention_points"],
-    "propertyOrdering": ["executive_summary", "strength_signals", "risk_signals",
-                         "evidence_gaps", "tentative_score", "manager_attention_points", "verify_this"],
-}
-
-AI_OBJECTIVE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "objective_outcome_summary": {"type": "string"},
-        "leadership_signals": {
-            "type": "object",
-            "properties": {
-                "clarity": {"type": "string"},
-                "alignment": {"type": "string"},
-                "decision_making": {"type": "string"},
-                "unblocking": {"type": "string"},
-                "quality_bar": {"type": "string"},
-            },
-            "required": ["clarity", "alignment", "decision_making", "unblocking", "quality_bar"],
-            "propertyOrdering": ["clarity", "alignment", "decision_making", "unblocking", "quality_bar"],
-        },
-        "team_feedback_patterns": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
-        "mismatch": {"type": "string"},
-        "risks_in_execution": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
-        "tentative_dri_score": {"type": "integer", "minimum": 1, "maximum": 5},
-    },
-    "required": ["objective_outcome_summary", "leadership_signals",
-                 "team_feedback_patterns", "tentative_dri_score"],
-    "propertyOrdering": ["objective_outcome_summary", "leadership_signals",
-                         "team_feedback_patterns", "mismatch",
-                         "risks_in_execution", "tentative_dri_score"],
-}
-
-
-async def _call_gemini(system_instruction: str, user_prompt: str, schema: dict) -> dict:
-    client = get_ai_client()
-    if not client:
-        raise HTTPException(status_code=503,
-                            detail="AI is disabled. Set AI_ENABLED=true and GOOGLE_API_KEY.")
-    try:
-        response = client.models.generate_content(
-            model=AI_MODEL,
-            contents=user_prompt,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=0.4,
-                response_mime_type="application/json",
-                response_json_schema=schema,
-            ),
-        )
-        return json.loads(response.text)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("AI call failed")
-        raise HTTPException(status_code=502, detail=f"AI call failed: {str(e)[:200]}")
-
-
-@api.get("/ai/status")
-async def ai_status(_: dict = Depends(get_current_user)):
-    return {"enabled": AI_ENABLED and GENAI_AVAILABLE and bool(GOOGLE_API_KEY),
-            "model": AI_MODEL}
-
-
-@api.post("/ai/evaluate-individual")
-async def ai_evaluate_individual(user_id: str, objective_id: str,
-                                 _: dict = Depends(require_role("admin", "manager"))):
-    target = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
-    obj = await db.objectives.find_one({"id": objective_id}, {"_id": 0})
-    if not target or not obj:
-        raise HTTPException(status_code=404, detail="Not found")
-    plan = await db.plans.find_one({"user_id": user_id, "objective_id": objective_id}, {"_id": 0})
-    updates = await db.updates.find({"user_id": user_id, "objective_id": objective_id}, {"_id": 0}).to_list(500)
-    refl = await db.individual_reflections.find_one({"user_id": user_id, "objective_id": objective_id}, {"_id": 0})
-    payload = {
-        "person": {"name": target["name"], "role": target["role"]},
-        "objective": {"title": obj["title"], "description": obj["description"],
-                      "success_metric": obj["success_metric"], "target_value": obj.get("target_value"),
-                      "current_value": obj.get("current_value")},
-        "plan": plan, "weekly_updates": updates, "reflection": refl,
-    }
-    system = (
-        "You are an internal performance evaluator for a startup's 3-month execution cycle. "
-        "Be evidence-based. If data is thin, say so in evidence_gaps. Never invent facts. "
-        "Tone: sharp, concrete, operator-minded. Output JSON matching the schema exactly."
-    )
-    prompt = ("Evaluate the contributor below using only the evidence provided.\n\n"
-              + json.dumps(payload, default=str))
-    result = await _call_gemini(system, prompt, AI_INDIVIDUAL_SCHEMA)
-    record = {
-        "id": str(uuid.uuid4()),
-        "kind": "individual",
-        "user_id": user_id,
-        "objective_id": objective_id,
-        "output": result,
-        "model": AI_MODEL,
-        "created_at": now_utc(),
-    }
-    await db.ai_evaluations.insert_one(dict(record))
-    record.pop("_id", None)
-    return record
-
-
-@api.post("/ai/evaluate-objective")
-async def ai_evaluate_objective(objective_id: str,
-                                _: dict = Depends(require_role("admin", "manager"))):
-    obj = await db.objectives.find_one({"id": objective_id}, {"_id": 0})
-    if not obj:
-        raise HTTPException(status_code=404, detail="Objective not found")
-    dri = await db.users.find_one({"id": obj["dri_id"]}, {"_id": 0, "password_hash": 0})
-    dri_refl = await db.dri_reflections.find_one({"objective_id": objective_id}, {"_id": 0})
-    feedback = await db.feedback.find({"objective_id": objective_id}, {"_id": 0, "user_id": 0}).to_list(500)
-    updates = await db.updates.find({"objective_id": objective_id}, {"_id": 0}).to_list(500)
-    payload = {
-        "objective": {k: obj.get(k) for k in ["title", "description", "success_metric",
-                                              "current_value", "target_value", "rigor_questions"]},
-        "dri": {"name": dri["name"] if dri else "", "role": dri["role"] if dri else ""},
-        "dri_reflection": dri_refl, "team_feedback": feedback, "weekly_updates": updates,
-    }
-    system = (
-        "You are an internal performance evaluator for a 3-month execution cycle. "
-        "Evaluate DRI leadership across clarity, alignment, decision-making, unblocking, quality_bar. "
-        "Compare DRI self-view to team feedback and flag mismatches honestly. "
-        "Output JSON matching the schema exactly."
-    )
-    prompt = "Evaluate the DRI and objective using only the evidence below.\n\n" + json.dumps(payload, default=str)
-    result = await _call_gemini(system, prompt, AI_OBJECTIVE_SCHEMA)
-    record = {
-        "id": str(uuid.uuid4()),
-        "kind": "objective",
-        "objective_id": objective_id,
-        "output": result,
-        "model": AI_MODEL,
-        "created_at": now_utc(),
-    }
-    await db.ai_evaluations.insert_one(dict(record))
-    record.pop("_id", None)
-    return record
-
-
-@api.get("/ai/evaluations")
-async def list_ai_evaluations(kind: Optional[str] = None,
-                              user_id: Optional[str] = None,
-                              objective_id: Optional[str] = None,
-                              _: dict = Depends(require_role("admin", "manager"))):
-    q = {}
-    if kind:
-        q["kind"] = kind
-    if user_id:
-        q["user_id"] = user_id
-    if objective_id:
-        q["objective_id"] = objective_id
-    return await db.ai_evaluations.find(q, {"_id": 0}).sort("created_at", -1).to_list(200)
 
 
 # ---------- HEALTH ----------
@@ -995,6 +845,7 @@ async def shutdown():
 
 
 # ============ CORS + INCLUDE ============
+api.include_router(build_ai_router(db, require_role, get_current_user, now_utc))
 app.include_router(api)
 
 app.add_middleware(

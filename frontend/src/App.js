@@ -13,6 +13,7 @@ import Reflection from "@/pages/Reflection";
 import DRIFeedbackPage from "@/pages/DRIFeedbackPage";
 import ManagerReview from "@/pages/ManagerReview";
 import AdminUsers from "@/pages/AdminUsers";
+import MyFeedback from "@/pages/MyFeedback";
 import ResetPassword from "@/pages/ResetPassword";
 
 function Protected({ children }) {
@@ -42,6 +43,7 @@ function AppRoutes() {
         <Route path="weekly" element={<WeeklyUpdatePage />} />
         <Route path="reflection" element={<Reflection />} />
         <Route path="feedback" element={<DRIFeedbackPage />} />
+        <Route path="my-feedback" element={<MyFeedback />} />
         <Route path="manager" element={<ManagerReview />} />
         <Route path="admin/users" element={<AdminUsers />} />
       </Route>
