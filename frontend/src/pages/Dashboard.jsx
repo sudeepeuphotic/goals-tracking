@@ -7,6 +7,7 @@ import WeeklyUpdateWidget from "@/components/WeeklyUpdateWidget";
 import EmptyState from "@/components/EmptyState";
 import { Button } from "@/components/ui/button";
 import AIPanel from "@/components/AIPanel";
+import TeamOverview from "@/components/TeamOverview";
 import { Bell } from "lucide-react";
 
 function currentWeekISO() {
@@ -83,8 +84,12 @@ export default function Dashboard() {
       </div>
 
       {!currentObjective ? (
-        <EmptyState title="No objectives yet" hint="Ask your admin to assign you as a DRI or contributor to an objective."
-          action={<Button onClick={() => nav("/cycles")} className="rounded-none bg-black text-white" data-testid="go-cycles-btn">Go to cycles →</Button>} />
+        (user.role === "admin" || user.role === "manager") && activeCycle ? (
+          <TeamOverview cycle={activeCycle} />
+        ) : (
+          <EmptyState title="No objectives yet" hint="Ask your admin to assign you as a DRI or contributor to an objective."
+            action={<Button onClick={() => nav("/cycles")} className="rounded-none bg-black text-white" data-testid="go-cycles-btn">Go to cycles →</Button>} />
+        )
       ) : (
         <>
           {overdueObjectives.length > 0 && (
