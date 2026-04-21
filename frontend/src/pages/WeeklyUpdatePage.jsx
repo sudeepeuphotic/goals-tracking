@@ -23,14 +23,20 @@ export default function WeeklyUpdatePage() {
 
   const [objectives, setObjectives] = useState([]);
   const [users, setUsers] = useState([]);
+  const [manageable, setManageable] = useState([]);
   const [activeId, setActiveId] = useState("");
   const [actingAs, setActingAs] = useState(user.id);
   const [allUpdates, setAllUpdates] = useState([]);
 
   const load = async () => {
-    const [ob, us] = await Promise.all([api.get("/objectives"), api.get("/users")]);
+    const [ob, us, mg] = await Promise.all([
+      api.get("/objectives"),
+      api.get("/users"),
+      api.get("/users/manageable"),
+    ]);
     setObjectives(ob.data);
     setUsers(us.data);
+    setManageable(mg.data);
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
@@ -95,7 +101,7 @@ export default function WeeklyUpdatePage() {
               <SelectTrigger className="rounded-none border-black w-[260px]" data-testid="weekly-acting-as"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value={user.id}>Myself</SelectItem>
-                {users.filter(u => u.id !== user.id).map(u =>
+                {manageable.filter(u => u.id !== user.id).map(u =>
                   <SelectItem key={u.id} value={u.id}>
                     {u.name} · {u.role}
                   </SelectItem>

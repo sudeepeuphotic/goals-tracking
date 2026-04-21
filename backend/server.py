@@ -109,6 +109,46 @@ def require_role(*roles):
     return _check
 
 
+# ============ HIERARCHY ============
+async def can_manage(current: dict, target_id: str) -> bool:
+    """Admin can manage anyone. Self always. Otherwise walk the target's manager chain."""
+    if current.get("role") == "admin":
+        return True
+    if current["id"] == target_id:
+        return True
+    visited = set()
+    cur = await db.users.find_one({"id": target_id}, {"_id": 0, "password_hash": 0})
+    while cur and cur["id"] not in visited:
+        visited.add(cur["id"])
+        mgr_id = cur.get("manager_id")
+        if not mgr_id:
+            return False
+        if mgr_id == current["id"]:
+            return True
+        cur = await db.users.find_one({"id": mgr_id}, {"_id": 0, "password_hash": 0})
+    return False
+
+
+async def manageable_ids(current: dict) -> set:
+    """All user ids the current user can act on."""
+    all_users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(1000)
+    if current.get("role") == "admin":
+        return {u["id"] for u in all_users}
+    result = {current["id"]}
+    # BFS downward from current using manager_id edges
+    queue = [current["id"]]
+    by_mgr = {}
+    for u in all_users:
+        by_mgr.setdefault(u.get("manager_id"), []).append(u["id"])
+    while queue:
+        mgr = queue.pop()
+        for uid in by_mgr.get(mgr, []):
+            if uid not in result:
+                result.add(uid)
+                queue.append(uid)
+    return result
+
+
 # ============ BRUTE FORCE HELPERS ============
 async def is_locked_out(identifier: str) -> bool:
     if MAX_LOGIN_ATTEMPTS <= 0:
@@ -390,13 +430,60 @@ async def refresh_token(request: Request, response: Response):
 
 
 # ---------- USERS ----------
+class UserPatch(BaseModel):
+    manager_id: Optional[str] = None
+    role: Optional[Literal["admin", "manager", "dri", "contributor"]] = None
+    name: Optional[str] = None
+    clear_manager: Optional[bool] = False
+
+
 @api.get("/users")
 async def list_users(user: dict = Depends(get_current_user)):
     projection = {"_id": 0, "password_hash": 0}
     users = await db.users.find({}, projection).to_list(500)
     if user["role"] not in ("admin", "manager"):
-        users = [{"id": u["id"], "name": u["name"], "role": u["role"]} for u in users]
+        users = [{"id": u["id"], "name": u["name"], "role": u["role"],
+                  "manager_id": u.get("manager_id")} for u in users]
     return users
+
+
+@api.get("/users/manageable")
+async def list_manageable(user: dict = Depends(get_current_user)):
+    """Users the caller can edit plans/updates for (self + entire downline, or all for admin)."""
+    ids = await manageable_ids(user)
+    users = await db.users.find({"id": {"$in": list(ids)}},
+                                {"_id": 0, "password_hash": 0}).to_list(500)
+    return users
+
+
+@api.patch("/users/{user_id}")
+async def patch_user(user_id: str, payload: UserPatch, _: dict = Depends(require_role("admin"))):
+    existing = await db.users.find_one({"id": user_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found")
+    updates = {}
+    if payload.role is not None:
+        updates["role"] = payload.role
+    if payload.name is not None:
+        updates["name"] = payload.name
+    if payload.clear_manager:
+        updates["manager_id"] = None
+    elif payload.manager_id is not None:
+        if payload.manager_id == user_id:
+            raise HTTPException(status_code=400, detail="A user cannot manage themselves")
+        # prevent cycles
+        visited = {user_id}
+        cur_id = payload.manager_id
+        while cur_id:
+            if cur_id in visited:
+                raise HTTPException(status_code=400, detail="Assignment would create a cycle")
+            visited.add(cur_id)
+            up = await db.users.find_one({"id": cur_id}, {"manager_id": 1, "_id": 0})
+            cur_id = up.get("manager_id") if up else None
+        updates["manager_id"] = payload.manager_id
+    if updates:
+        await db.users.update_one({"id": user_id}, {"$set": updates})
+    return await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
 
 
 @api.post("/users")
@@ -411,6 +498,7 @@ async def create_user(payload: UserRegister, _: dict = Depends(require_role("adm
         "password_hash": hash_password(payload.password),
         "name": payload.name,
         "role": payload.role,
+        "manager_id": None,
         "created_at": now_utc(),
     }
     await db.users.insert_one(doc)
@@ -507,23 +595,85 @@ async def list_plans(objective_id: Optional[str] = None, user_id: Optional[str] 
 async def upsert_plan(payload: IndividualPlanPayload,
                       user_id: Optional[str] = None,
                       user: dict = Depends(get_current_user)):
-    target_user_id = user["id"]
-    if user_id and user_id != user["id"]:
-        if user["role"] not in ("admin", "manager"):
-            raise HTTPException(status_code=403, detail="Only admin/manager can edit others' plans")
-        target_user_id = user_id
+    target_user_id = user_id or user["id"]
+    if not await can_manage(user, target_user_id):
+        raise HTTPException(status_code=403, detail="Not authorized to edit this user's plan")
     doc = payload.model_dump()
     doc["user_id"] = target_user_id
     doc["updated_at"] = now_utc()
     existing = await db.plans.find_one({"user_id": target_user_id, "objective_id": payload.objective_id})
     if existing:
+        # preserve tasks array on upsert
+        doc["tasks"] = existing.get("tasks", [])
         await db.plans.update_one({"id": existing["id"]}, {"$set": doc})
         return await db.plans.find_one({"id": existing["id"]}, {"_id": 0})
     doc["id"] = str(uuid.uuid4())
     doc["created_at"] = now_utc()
+    doc["tasks"] = []
     await db.plans.insert_one(doc)
     doc.pop("_id", None)
     return doc
+
+
+# ---------- TASKS ----------
+class TaskPayload(BaseModel):
+    title: str
+    status: Literal["todo", "doing", "done"] = "todo"
+    due_date: Optional[str] = None
+
+
+class TaskPatch(BaseModel):
+    title: Optional[str] = None
+    status: Optional[Literal["todo", "doing", "done"]] = None
+    due_date: Optional[str] = None
+
+
+@api.post("/plans/{plan_id}/tasks")
+async def add_task(plan_id: str, payload: TaskPayload, user: dict = Depends(get_current_user)):
+    plan = await db.plans.find_one({"id": plan_id})
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    if not await can_manage(user, plan["user_id"]):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    task = {
+        "id": str(uuid.uuid4()),
+        "title": payload.title,
+        "status": payload.status,
+        "due_date": payload.due_date,
+        "created_by": user["id"],
+        "created_at": now_utc(),
+    }
+    await db.plans.update_one({"id": plan_id}, {"$push": {"tasks": task}})
+    return task
+
+
+@api.patch("/plans/{plan_id}/tasks/{task_id}")
+async def patch_task(plan_id: str, task_id: str, payload: TaskPatch,
+                     user: dict = Depends(get_current_user)):
+    plan = await db.plans.find_one({"id": plan_id})
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    if not await can_manage(user, plan["user_id"]):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    update = {f"tasks.$.{k}": v for k, v in payload.model_dump(exclude_none=True).items()}
+    if update:
+        await db.plans.update_one({"id": plan_id, "tasks.id": task_id}, {"$set": update})
+    p = await db.plans.find_one({"id": plan_id}, {"_id": 0})
+    for t in p.get("tasks", []):
+        if t["id"] == task_id:
+            return t
+    raise HTTPException(status_code=404, detail="Task not found")
+
+
+@api.delete("/plans/{plan_id}/tasks/{task_id}")
+async def delete_task(plan_id: str, task_id: str, user: dict = Depends(get_current_user)):
+    plan = await db.plans.find_one({"id": plan_id})
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    if not await can_manage(user, plan["user_id"]):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    await db.plans.update_one({"id": plan_id}, {"$pull": {"tasks": {"id": task_id}}})
+    return {"ok": True}
 
 
 # ---------- WEEKLY UPDATES ----------
@@ -544,11 +694,9 @@ async def list_updates(objective_id: Optional[str] = None, user_id: Optional[str
 async def create_update(payload: WeeklyUpdatePayload,
                         user_id: Optional[str] = None,
                         user: dict = Depends(get_current_user)):
-    target_user_id = user["id"]
-    if user_id and user_id != user["id"]:
-        if user["role"] not in ("admin", "manager"):
-            raise HTTPException(status_code=403, detail="Only admin/manager can submit on others' behalf")
-        target_user_id = user_id
+    target_user_id = user_id or user["id"]
+    if not await can_manage(user, target_user_id):
+        raise HTTPException(status_code=403, detail="Not authorized to submit for this user")
     doc = payload.model_dump()
     doc["id"] = str(uuid.uuid4())
     doc["user_id"] = target_user_id
@@ -756,7 +904,7 @@ async def seed_if_empty():
         })
         logger.info("Admin seeded")
 
-    # demo users (idempotent)
+    # demo users (idempotent) + hierarchy
     demo = [
         ("manager@noshrobotics.co", "password123", "Morgan Lee", "manager"),
         ("dri@noshrobotics.co", "password123", "Dana Rao", "dri"),
@@ -770,11 +918,24 @@ async def seed_if_empty():
             uid = str(uuid.uuid4())
             await db.users.insert_one({
                 "id": uid, "email": email, "password_hash": hash_password(pw),
-                "name": name, "role": role, "created_at": now_utc(),
+                "name": name, "role": role, "manager_id": None, "created_at": now_utc(),
             })
             user_ids[email] = uid
         else:
             user_ids[email] = u["id"]
+
+    # Hierarchy: Morgan -> Dana -> Alice & Bob. Morgan reports to admin.
+    admin_user = await db.users.find_one({"email": admin_email})
+    hierarchy = [
+        ("manager@noshrobotics.co", admin_user["id"] if admin_user else None),
+        ("dri@noshrobotics.co", user_ids.get("manager@noshrobotics.co")),
+        ("alice@noshrobotics.co", user_ids.get("dri@noshrobotics.co")),
+        ("bob@noshrobotics.co", user_ids.get("dri@noshrobotics.co")),
+    ]
+    for email, mgr_id in hierarchy:
+        if mgr_id:
+            await db.users.update_one({"email": email, "manager_id": None},
+                                      {"$set": {"manager_id": mgr_id}})
 
     # demo cycle + objectives
     if await db.cycles.count_documents({}) == 0:

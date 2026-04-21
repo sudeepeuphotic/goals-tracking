@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import EmptyState from "@/components/EmptyState";
+import TasksSection from "@/components/TasksSection";
 
 const FIELDS = [
   { key: "mission_context", label: "Mission context", textarea: true },
@@ -105,7 +106,7 @@ export default function MyPlan() {
               <SelectTrigger className="rounded-none border-black w-[260px]" data-testid="plan-acting-as"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value={user.id}>Myself</SelectItem>
-                {users.filter(u => u.id !== user.id).map(u =>
+                {manageable.filter(u => u.id !== user.id).map(u =>
                   <SelectItem key={u.id} value={u.id}>
                     {u.name} · {u.role}
                   </SelectItem>
@@ -193,6 +194,11 @@ export default function MyPlan() {
                 onChange={e => setForm({ ...form, [k]: e.target.value })} data-testid={`plan-${k}`} />
             </div>
           ))}
+
+          <TasksSection
+            plan={plans.find(p => p.objective_id === activeId && p.user_id === actingAs)}
+            onChanged={load}
+          />
         </div>
       )}
 
