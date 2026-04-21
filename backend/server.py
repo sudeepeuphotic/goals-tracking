@@ -305,7 +305,8 @@ async def register(payload: UserRegister, response: Response):
 @api.post("/auth/login")
 async def login(payload: UserLogin, request: Request, response: Response):
     email = payload.email.lower()
-    ip = request.client.host if request.client else "unknown"
+    xff = (request.headers.get('x-forwarded-for') or '').split(',')[0].strip()
+    ip = xff or (request.client.host if request.client else "unknown")
     identifier = f"{ip}:{email}"
     if await is_locked_out(identifier):
         raise HTTPException(status_code=429, detail=f"Too many attempts. Try again in {LOCKOUT_MINUTES} minutes.")

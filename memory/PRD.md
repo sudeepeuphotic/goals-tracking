@@ -45,6 +45,14 @@ tool to run 3-month execution cycles.
 - Admin Users page — list + create.
 - IDE-brutalist design: Space Grotesk headings, IBM Plex Sans body, IBM Plex Mono for data/labels, sharp 1px borders, 4px 4px 0 shadows.
 
+## Iteration 2 — 2026-02-21
+- **Password reset** — `/api/auth/forgot-password` (logs reset link to server console, dev mode) + `/api/auth/reset-password` with 32-byte URL-safe token + 1-hour TTL + single-use. Frontend: "Forgot password?" dialog on Login + `/reset-password?token=…` page.
+- **Brute-force lockout** — 5 failed logins per `{real_ip}:{email}` → 15-min lockout (429). Uses `x-forwarded-for` (first hop) instead of `request.client.host` so it works correctly behind k8s ingress. Verified: 6th attempt returns 429.
+- **In-app reminder banner** — Dashboard shows yellow "REMINDER · YYYY-Www" banner counting user objectives with no update for the current ISO week, with a Submit-now CTA to `/weekly`. (External email/Slack deferred per user choice.)
+- **Progress charts** — Added `ProgressChart` (recharts) to Objective Detail → Updates tab. Status-over-time line (G/Y/R step chart) + metric current→target bar.
+- **Privacy-scoped /api/users** — Admin/manager get full fields; contributors get only `{id, name, role}`.
+- **AI evaluator (Gemini 3 Flash)** — Live, manager/admin-only. `POST /api/ai/evaluate-individual` and `POST /api/ai/evaluate-objective`. Uses `google-genai` SDK with `response_mime_type=application/json` + strict JSON schema. Feature-flagged via `AI_ENABLED` + `GOOGLE_API_KEY` + `AI_MODEL`. `AIPanel` component handles run/re-run, caching last eval, and compact display (exec summary, strength/risk signals, leadership grid, mismatch, execution risks, tentative score). Integrated on Dashboard (self-view for managers), Objective Detail AI tab, and Manager Review AI tab.
+
 ## Backlog (prioritised)
 - **P0** AI evaluation layer — Gemini 3 Flash (configurable; skippable). Generates executive summary, strength/risk signals, leadership signals, tentative score, manager-attention points. Manager-only.
 - **P1** Feedback anonymisation / summary view for the DRI themselves (v1 shows aggregate only to manager/admin).
