@@ -45,22 +45,26 @@ def _login(email, password):
 @pytest.fixture(scope="session")
 def admin():
     mongo.login_attempts.delete_many({})
-    return _login("admin@nosh.io", "admin123")
+    return _login(os.environ["TEST_ADMIN_EMAIL"] if "TEST_ADMIN_EMAIL" in os.environ else os.environ.get("ADMIN_EMAIL", ""),
+                  os.environ["TEST_ADMIN_PW"] if "TEST_ADMIN_PW" in os.environ else os.environ.get("ADMIN_PASSWORD", ""))
 
 
 @pytest.fixture(scope="session")
 def manager():
-    return _login("manager@nosh.io", "password123")
+    return _login(os.environ.get("TEST_MANAGER_EMAIL", "manager@nosh.io"),
+                  os.environ.get("TEST_USER_PW", ""))
 
 
 @pytest.fixture(scope="session")
 def dri():
-    return _login("dri@nosh.io", "password123")
+    return _login(os.environ.get("TEST_DRI_EMAIL", "dri@nosh.io"),
+                  os.environ.get("TEST_USER_PW", ""))
 
 
 @pytest.fixture(scope="session")
 def alice():
-    return _login("alice@nosh.io", "password123")
+    return _login(os.environ.get("TEST_ALICE_EMAIL", "alice@nosh.io"),
+                  os.environ.get("TEST_USER_PW", ""))
 
 
 # ===================== AI REFACTOR REGRESSION =====================

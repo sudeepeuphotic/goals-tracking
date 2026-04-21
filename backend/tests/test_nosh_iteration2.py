@@ -44,17 +44,20 @@ def _login(email, password):
 @pytest.fixture(scope="session")
 def admin():
     mongo.login_attempts.delete_many({})  # clear stale locks before tests
-    return _login("admin@nosh.io", "admin123")
+    return _login(os.environ["TEST_ADMIN_EMAIL"] if "TEST_ADMIN_EMAIL" in os.environ else os.environ.get("ADMIN_EMAIL", ""),
+                  os.environ["TEST_ADMIN_PW"] if "TEST_ADMIN_PW" in os.environ else os.environ.get("ADMIN_PASSWORD", ""))
 
 
 @pytest.fixture(scope="session")
 def manager():
-    return _login("manager@nosh.io", "password123")
+    return _login(os.environ.get("TEST_MANAGER_EMAIL", "manager@nosh.io"),
+                  os.environ.get("TEST_USER_PW", ""))
 
 
 @pytest.fixture(scope="session")
 def alice():
-    return _login("alice@nosh.io", "password123")
+    return _login(os.environ.get("TEST_ALICE_EMAIL", "alice@nosh.io"),
+                  os.environ.get("TEST_USER_PW", ""))
 
 
 @pytest.fixture(scope="session")
@@ -81,8 +84,8 @@ class TestBruteForce:
         # Use alice's email BUT first clear attempts; then after 5 fails try 6th is 429.
         # To avoid polluting alice, use a brand-new account.
         # Register a throwaway user via admin
-        admin_s = _login("admin@nosh.io", "admin123")
-        password = "TestPass123!"
+        admin_s = _login(os.environ.get("TEST_ADMIN_EMAIL") or os.environ.get("ADMIN_EMAIL", ""), os.environ.get("TEST_ADMIN_PW") or os.environ.get("ADMIN_PASSWORD", ""))
+        password = "Bf-" + uuid.uuid4().hex[:12]
         resp = admin_s.post(f"{API}/users", json={
             "email": test_email, "password": password, "name": "BF Test", "role": "contributor"
         }, timeout=20)
@@ -158,10 +161,10 @@ class TestPasswordReset:
 
     def test_reset_password_valid_token_then_reuse_rejected(self):
         # create a throwaway user
-        admin_s = _login("admin@nosh.io", "admin123")
+        admin_s = _login(os.environ.get("TEST_ADMIN_EMAIL") or os.environ.get("ADMIN_EMAIL", ""), os.environ.get("TEST_ADMIN_PW") or os.environ.get("ADMIN_PASSWORD", ""))
         email = f"reset_{uuid.uuid4().hex[:8]}@nosh.io"
-        old_pw = "OldPass123!"
-        new_pw = "NewPass456!"
+        old_pw = "Old-" + uuid.uuid4().hex[:12]
+        new_pw = "New-" + uuid.uuid4().hex[:12]
         r = admin_s.post(f"{API}/users", json={
             "email": email, "password": old_pw, "name": "Reset Test", "role": "contributor"
         }, timeout=20)
@@ -195,7 +198,7 @@ class TestPasswordReset:
 
             # reused token rejected
             r = requests.post(f"{API}/auth/reset-password",
-                              json={"token": tok["token"], "new_password": "Another123!"}, timeout=20)
+                              json={"token": tok["token"], "new_password": "Ra-" + uuid.uuid4().hex[:10]}, timeout=20)
             assert r.status_code == 400, f"reused token should be 400, got {r.status_code}"
         finally:
             mongo.users.delete_many({"email": email})
@@ -204,7 +207,7 @@ class TestPasswordReset:
 
     def test_reset_password_invalid_token(self):
         r = requests.post(f"{API}/auth/reset-password",
-                          json={"token": "totally-bogus-token", "new_password": "Something123"},
+                          json={"token": "totally-bogus-token", "new_password": "Bg-" + uuid.uuid4().hex[:10]},
                           timeout=20)
         assert r.status_code == 400
 
@@ -223,7 +226,7 @@ class TestPasswordReset:
         })
         try:
             r = requests.post(f"{API}/auth/reset-password",
-                              json={"token": expired_tok, "new_password": "NewPass789!"},
+                              json={"token": expired_tok, "new_password": "Ex-" + uuid.uuid4().hex[:10]},
                               timeout=20)
             assert r.status_code == 400
             assert "expired" in r.text.lower()

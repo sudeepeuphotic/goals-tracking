@@ -34,27 +34,32 @@ def _session(email: str, password: str) -> requests.Session:
 # ---------- Fixtures ----------
 @pytest.fixture(scope="session")
 def admin():
-    return _session("admin@nosh.io", "admin123")
+    return _session(os.environ["TEST_ADMIN_EMAIL"] if "TEST_ADMIN_EMAIL" in os.environ else os.environ.get("ADMIN_EMAIL", ""),
+                    os.environ["TEST_ADMIN_PW"] if "TEST_ADMIN_PW" in os.environ else os.environ.get("ADMIN_PASSWORD", ""))
 
 
 @pytest.fixture(scope="session")
 def manager():
-    return _session("manager@nosh.io", "password123")
+    return _session(os.environ.get("TEST_MANAGER_EMAIL", "manager@nosh.io"),
+                    os.environ.get("TEST_USER_PW", ""))
 
 
 @pytest.fixture(scope="session")
 def dri():
-    return _session("dri@nosh.io", "password123")
+    return _session(os.environ.get("TEST_DRI_EMAIL", "dri@nosh.io"),
+                    os.environ.get("TEST_USER_PW", ""))
 
 
 @pytest.fixture(scope="session")
 def alice():
-    return _session("alice@nosh.io", "password123")
+    return _session(os.environ.get("TEST_ALICE_EMAIL", "alice@nosh.io"),
+                    os.environ.get("TEST_USER_PW", ""))
 
 
 @pytest.fixture(scope="session")
 def bob():
-    return _session("bob@nosh.io", "password123")
+    return _session(os.environ.get("TEST_BOB_EMAIL", "bob@nosh.io"),
+                    os.environ.get("TEST_USER_PW", ""))
 
 
 @pytest.fixture(scope="session")
@@ -96,7 +101,10 @@ def test_health():
 # ---------- Auth ----------
 def test_login_sets_cookies_and_returns_user():
     s = requests.Session()
-    r = s.post(f"{API}/auth/login", json={"email": "admin@nosh.io", "password": "admin123"}, timeout=20)
+    r = s.post(f"{API}/auth/login",
+               json={"email": os.environ["TEST_ADMIN_EMAIL"] if "TEST_ADMIN_EMAIL" in os.environ else os.environ.get("ADMIN_EMAIL", ""),
+                     "password": os.environ["TEST_ADMIN_PW"] if "TEST_ADMIN_PW" in os.environ else os.environ.get("ADMIN_PASSWORD", "")},
+               timeout=20)
     assert r.status_code == 200
     data = r.json()
     assert data["email"] == "admin@nosh.io"
@@ -126,7 +134,8 @@ def test_auth_me_requires_cookie():
 
 
 def test_logout_clears_cookies():
-    s = _session("bob@nosh.io", "password123")
+    s = _session(os.environ.get("TEST_BOB_EMAIL", "bob@nosh.io"),
+                 os.environ.get("TEST_USER_PW", ""))
     r = s.post(f"{API}/auth/logout", timeout=20)
     assert r.status_code == 200
     # After server clears, subsequent /me should fail with server-side cookies
