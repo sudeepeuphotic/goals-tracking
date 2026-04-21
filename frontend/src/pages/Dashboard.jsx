@@ -7,6 +7,16 @@ import WeeklyUpdateWidget from "@/components/WeeklyUpdateWidget";
 import EmptyState from "@/components/EmptyState";
 import { Button } from "@/components/ui/button";
 import AIPanel from "@/components/AIPanel";
+import { Bell } from "lucide-react";
+
+function currentWeekISO() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + 4 - (d.getDay() || 7));
+  const yearStart = new Date(d.getFullYear(), 0, 1);
+  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return `${d.getFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+}
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -46,6 +56,13 @@ export default function Dashboard() {
   const myPlan = useMemo(() => plans.find(p => p.objective_id === currentObjective?.id), [plans, currentObjective]);
   const latestUpdate = useMemo(() => updates.find(u => u.objective_id === currentObjective?.id), [updates, currentObjective]);
 
+  const thisWeek = currentWeekISO();
+  const overdueObjectives = useMemo(() =>
+    myObjectives.filter(o => !updates.some(u => u.objective_id === o.id && u.week === thisWeek)),
+    [myObjectives, updates, thisWeek]
+  );
+  const canSeeAI = user.role === "admin" || user.role === "manager";
+
   if (loading) return <div className="p-10 mono-label">Loading…</div>;
 
   return (
@@ -69,7 +86,23 @@ export default function Dashboard() {
         <EmptyState title="No objectives yet" hint="Ask your admin to assign you as a DRI or contributor to an objective."
           action={<Button onClick={() => nav("/cycles")} className="rounded-none bg-black text-white" data-testid="go-cycles-btn">Go to cycles →</Button>} />
       ) : (
-        <div className="grid lg:grid-cols-3 gap-6" data-testid="dashboard-grid">
+        <>
+          {overdueObjectives.length > 0 && (
+            <div className="brutal-card p-4 mb-6 flex items-center gap-4 bg-[#FFD600]" data-testid="overdue-banner">
+              <Bell size={18} />
+              <div className="flex-1">
+                <div className="mono-label">REMINDER · {thisWeek}</div>
+                <div className="text-sm font-medium">
+                  {overdueObjectives.length} objective{overdueObjectives.length > 1 ? "s" : ""} waiting for your weekly update.
+                </div>
+              </div>
+              <Button onClick={() => nav("/weekly")} className="rounded-none bg-black text-white" data-testid="overdue-cta">
+                Submit now →
+              </Button>
+            </div>
+          )}
+
+          <div className="grid lg:grid-cols-3 gap-6" data-testid="dashboard-grid">
           {/* Left: objective + plan */}
           <div className="lg:col-span-2 space-y-6">
             <div className="brutal-card p-5">
@@ -136,9 +169,13 @@ export default function Dashboard() {
           {/* Right: weekly widget + AI panel */}
           <div className="space-y-6">
             <WeeklyUpdateWidget objective={currentObjective} onSubmitted={load} />
-            <AIPanel />
+            {canSeeAI && (
+              <AIPanel kind="individual" userId={user.id} objectiveId={currentObjective.id}
+                canRun={true} title="AI_ANALYSIS · ME" />
+            )}
           </div>
         </div>
+        </>
       )}
     </div>
   );

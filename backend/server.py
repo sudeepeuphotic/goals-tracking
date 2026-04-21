@@ -9,6 +9,8 @@ import uuid
 import logging
 import bcrypt
 import jwt
+import json
+import secrets
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal
 
@@ -16,6 +18,13 @@ from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Respons
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
+
+try:
+    from google import genai
+    from google.genai import types as genai_types
+    GENAI_AVAILABLE = True
+except Exception:
+    GENAI_AVAILABLE = False
 
 
 # ============ CONFIG ============
@@ -27,6 +36,20 @@ db = client[db_name]
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALGORITHM = "HS256"
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY', '')
+AI_ENABLED = os.environ.get('AI_ENABLED', 'false').lower() == 'true'
+AI_MODEL = os.environ.get('AI_MODEL', 'gemini-3-flash-preview')
+
+# Brute force config
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_MINUTES = 15
+
+_ai_client = None
+def get_ai_client():
+    global _ai_client
+    if _ai_client is None and AI_ENABLED and GENAI_AVAILABLE and GOOGLE_API_KEY:
+        _ai_client = genai.Client(api_key=GOOGLE_API_KEY)
+    return _ai_client
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -99,6 +122,30 @@ def require_role(*roles):
             raise HTTPException(status_code=403, detail="Forbidden")
         return user
     return _check
+
+
+# ============ BRUTE FORCE HELPERS ============
+async def is_locked_out(identifier: str) -> bool:
+    rec = await db.login_attempts.find_one({"identifier": identifier})
+    if not rec:
+        return False
+    if rec.get("locked_until"):
+        until = datetime.fromisoformat(rec["locked_until"])
+        return datetime.now(timezone.utc) < until
+    return False
+
+
+async def record_failure(identifier: str):
+    rec = await db.login_attempts.find_one({"identifier": identifier})
+    count = (rec.get("count", 0) if rec else 0) + 1
+    update = {"identifier": identifier, "count": count, "last_at": now_utc()}
+    if count >= MAX_LOGIN_ATTEMPTS:
+        update["locked_until"] = (datetime.now(timezone.utc) + timedelta(minutes=LOCKOUT_MINUTES)).isoformat()
+    await db.login_attempts.update_one({"identifier": identifier}, {"$set": update}, upsert=True)
+
+
+async def clear_failures(identifier: str):
+    await db.login_attempts.delete_one({"identifier": identifier})
 
 
 # ============ MODELS ============
@@ -256,15 +303,66 @@ async def register(payload: UserRegister, response: Response):
 
 
 @api.post("/auth/login")
-async def login(payload: UserLogin, response: Response):
+async def login(payload: UserLogin, request: Request, response: Response):
     email = payload.email.lower()
+    ip = request.client.host if request.client else "unknown"
+    identifier = f"{ip}:{email}"
+    if await is_locked_out(identifier):
+        raise HTTPException(status_code=429, detail=f"Too many attempts. Try again in {LOCKOUT_MINUTES} minutes.")
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(payload.password, user["password_hash"]):
+        await record_failure(identifier)
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    await clear_failures(identifier)
     access = create_access_token(user["id"], email)
     refresh = create_refresh_token(user["id"])
     set_auth_cookies(response, access, refresh)
     return clean_user({**user})
+
+
+class ForgotPasswordPayload(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordPayload(BaseModel):
+    token: str
+    new_password: str
+
+
+@api.post("/auth/forgot-password")
+async def forgot_password(payload: ForgotPasswordPayload):
+    email = payload.email.lower()
+    user = await db.users.find_one({"email": email})
+    # Always respond 200 (don't leak email existence)
+    if user:
+        token = secrets.token_urlsafe(32)
+        expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+        await db.password_reset_tokens.insert_one({
+            "id": str(uuid.uuid4()),
+            "token": token,
+            "user_id": user["id"],
+            "expires_at": expires_at,
+            "used": False,
+            "created_at": now_utc(),
+        })
+        reset_link = f"{FRONTEND_URL}/reset-password?token={token}"
+        logger.info(f"[PASSWORD_RESET] email={email} link={reset_link}")
+    return {"ok": True, "message": "If an account exists, a reset link has been sent."}
+
+
+@api.post("/auth/reset-password")
+async def reset_password(payload: ResetPasswordPayload):
+    rec = await db.password_reset_tokens.find_one({"token": payload.token})
+    if not rec or rec.get("used"):
+        raise HTTPException(status_code=400, detail="Invalid or used token")
+    if datetime.fromisoformat(rec["expires_at"]) < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Token expired")
+    if len(payload.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password too short (min 6)")
+    await db.users.update_one({"id": rec["user_id"]},
+                              {"$set": {"password_hash": hash_password(payload.new_password)}})
+    await db.password_reset_tokens.update_one({"id": rec["id"]}, {"$set": {"used": True}})
+    return {"ok": True}
 
 
 @api.post("/auth/logout")
@@ -301,8 +399,11 @@ async def refresh_token(request: Request, response: Response):
 
 # ---------- USERS ----------
 @api.get("/users")
-async def list_users(_: dict = Depends(get_current_user)):
-    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(500)
+async def list_users(user: dict = Depends(get_current_user)):
+    projection = {"_id": 0, "password_hash": 0}
+    users = await db.users.find({}, projection).to_list(500)
+    if user["role"] not in ("admin", "manager"):
+        users = [{"id": u["id"], "name": u["name"], "role": u["role"]} for u in users]
     return users
 
 
@@ -594,6 +695,174 @@ async def upsert_manager_review(payload: ManagerReviewPayload,
     return doc
 
 
+# ---------- AI EVALUATOR (Gemini 3 Flash) ----------
+AI_INDIVIDUAL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "executive_summary": {"type": "string"},
+        "strength_signals": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
+        "risk_signals": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
+        "evidence_gaps": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+        "tentative_score": {"type": "integer", "minimum": 1, "maximum": 5},
+        "manager_attention_points": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
+        "verify_this": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
+    },
+    "required": ["executive_summary", "strength_signals", "risk_signals",
+                 "tentative_score", "manager_attention_points"],
+    "propertyOrdering": ["executive_summary", "strength_signals", "risk_signals",
+                         "evidence_gaps", "tentative_score", "manager_attention_points", "verify_this"],
+}
+
+AI_OBJECTIVE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "objective_outcome_summary": {"type": "string"},
+        "leadership_signals": {
+            "type": "object",
+            "properties": {
+                "clarity": {"type": "string"},
+                "alignment": {"type": "string"},
+                "decision_making": {"type": "string"},
+                "unblocking": {"type": "string"},
+                "quality_bar": {"type": "string"},
+            },
+            "required": ["clarity", "alignment", "decision_making", "unblocking", "quality_bar"],
+            "propertyOrdering": ["clarity", "alignment", "decision_making", "unblocking", "quality_bar"],
+        },
+        "team_feedback_patterns": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
+        "mismatch": {"type": "string"},
+        "risks_in_execution": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+        "tentative_dri_score": {"type": "integer", "minimum": 1, "maximum": 5},
+    },
+    "required": ["objective_outcome_summary", "leadership_signals",
+                 "team_feedback_patterns", "tentative_dri_score"],
+    "propertyOrdering": ["objective_outcome_summary", "leadership_signals",
+                         "team_feedback_patterns", "mismatch",
+                         "risks_in_execution", "tentative_dri_score"],
+}
+
+
+async def _call_gemini(system_instruction: str, user_prompt: str, schema: dict) -> dict:
+    client = get_ai_client()
+    if not client:
+        raise HTTPException(status_code=503,
+                            detail="AI is disabled. Set AI_ENABLED=true and GOOGLE_API_KEY.")
+    try:
+        response = client.models.generate_content(
+            model=AI_MODEL,
+            contents=user_prompt,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.4,
+                response_mime_type="application/json",
+                response_json_schema=schema,
+            ),
+        )
+        return json.loads(response.text)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("AI call failed")
+        raise HTTPException(status_code=502, detail=f"AI call failed: {str(e)[:200]}")
+
+
+@api.get("/ai/status")
+async def ai_status(_: dict = Depends(get_current_user)):
+    return {"enabled": AI_ENABLED and GENAI_AVAILABLE and bool(GOOGLE_API_KEY),
+            "model": AI_MODEL}
+
+
+@api.post("/ai/evaluate-individual")
+async def ai_evaluate_individual(user_id: str, objective_id: str,
+                                 _: dict = Depends(require_role("admin", "manager"))):
+    target = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    obj = await db.objectives.find_one({"id": objective_id}, {"_id": 0})
+    if not target or not obj:
+        raise HTTPException(status_code=404, detail="Not found")
+    plan = await db.plans.find_one({"user_id": user_id, "objective_id": objective_id}, {"_id": 0})
+    updates = await db.updates.find({"user_id": user_id, "objective_id": objective_id}, {"_id": 0}).to_list(500)
+    refl = await db.individual_reflections.find_one({"user_id": user_id, "objective_id": objective_id}, {"_id": 0})
+    payload = {
+        "person": {"name": target["name"], "role": target["role"]},
+        "objective": {"title": obj["title"], "description": obj["description"],
+                      "success_metric": obj["success_metric"], "target_value": obj.get("target_value"),
+                      "current_value": obj.get("current_value")},
+        "plan": plan, "weekly_updates": updates, "reflection": refl,
+    }
+    system = (
+        "You are an internal performance evaluator for a startup's 3-month execution cycle. "
+        "Be evidence-based. If data is thin, say so in evidence_gaps. Never invent facts. "
+        "Tone: sharp, concrete, operator-minded. Output JSON matching the schema exactly."
+    )
+    prompt = ("Evaluate the contributor below using only the evidence provided.\n\n"
+              + json.dumps(payload, default=str))
+    result = await _call_gemini(system, prompt, AI_INDIVIDUAL_SCHEMA)
+    record = {
+        "id": str(uuid.uuid4()),
+        "kind": "individual",
+        "user_id": user_id,
+        "objective_id": objective_id,
+        "output": result,
+        "model": AI_MODEL,
+        "created_at": now_utc(),
+    }
+    await db.ai_evaluations.insert_one(dict(record))
+    record.pop("_id", None)
+    return record
+
+
+@api.post("/ai/evaluate-objective")
+async def ai_evaluate_objective(objective_id: str,
+                                _: dict = Depends(require_role("admin", "manager"))):
+    obj = await db.objectives.find_one({"id": objective_id}, {"_id": 0})
+    if not obj:
+        raise HTTPException(status_code=404, detail="Objective not found")
+    dri = await db.users.find_one({"id": obj["dri_id"]}, {"_id": 0, "password_hash": 0})
+    dri_refl = await db.dri_reflections.find_one({"objective_id": objective_id}, {"_id": 0})
+    feedback = await db.feedback.find({"objective_id": objective_id}, {"_id": 0, "user_id": 0}).to_list(500)
+    updates = await db.updates.find({"objective_id": objective_id}, {"_id": 0}).to_list(500)
+    payload = {
+        "objective": {k: obj.get(k) for k in ["title", "description", "success_metric",
+                                              "current_value", "target_value", "rigor_questions"]},
+        "dri": {"name": dri["name"] if dri else "", "role": dri["role"] if dri else ""},
+        "dri_reflection": dri_refl, "team_feedback": feedback, "weekly_updates": updates,
+    }
+    system = (
+        "You are an internal performance evaluator for a 3-month execution cycle. "
+        "Evaluate DRI leadership across clarity, alignment, decision-making, unblocking, quality_bar. "
+        "Compare DRI self-view to team feedback and flag mismatches honestly. "
+        "Output JSON matching the schema exactly."
+    )
+    prompt = "Evaluate the DRI and objective using only the evidence below.\n\n" + json.dumps(payload, default=str)
+    result = await _call_gemini(system, prompt, AI_OBJECTIVE_SCHEMA)
+    record = {
+        "id": str(uuid.uuid4()),
+        "kind": "objective",
+        "objective_id": objective_id,
+        "output": result,
+        "model": AI_MODEL,
+        "created_at": now_utc(),
+    }
+    await db.ai_evaluations.insert_one(dict(record))
+    record.pop("_id", None)
+    return record
+
+
+@api.get("/ai/evaluations")
+async def list_ai_evaluations(kind: Optional[str] = None,
+                              user_id: Optional[str] = None,
+                              objective_id: Optional[str] = None,
+                              _: dict = Depends(require_role("admin", "manager"))):
+    q = {}
+    if kind:
+        q["kind"] = kind
+    if user_id:
+        q["user_id"] = user_id
+    if objective_id:
+        q["objective_id"] = objective_id
+    return await db.ai_evaluations.find(q, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
 # ---------- HEALTH ----------
 @api.get("/")
 async def root():
@@ -714,6 +983,8 @@ async def on_startup():
     await db.users.create_index("email", unique=True)
     await db.cycles.create_index("id", unique=True)
     await db.objectives.create_index("id", unique=True)
+    await db.login_attempts.create_index("identifier")
+    await db.password_reset_tokens.create_index("token")
     await seed_if_empty()
 
 

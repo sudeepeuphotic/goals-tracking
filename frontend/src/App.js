@@ -13,6 +13,7 @@ import Reflection from "@/pages/Reflection";
 import DRIFeedbackPage from "@/pages/DRIFeedbackPage";
 import ManagerReview from "@/pages/ManagerReview";
 import AdminUsers from "@/pages/AdminUsers";
+import ResetPassword from "@/pages/ResetPassword";
 
 function Protected({ children }) {
   const { user } = useAuth();
@@ -25,6 +26,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
       <Route
         path="/"
         element={

@@ -5,6 +5,7 @@ import { useAuth } from "@/context/AuthContext";
 import StatusLight from "@/components/StatusLight";
 import WeeklyUpdateWidget from "@/components/WeeklyUpdateWidget";
 import AIPanel from "@/components/AIPanel";
+import ProgressChart from "@/components/ProgressChart";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export default function ObjectiveDetail() {
@@ -81,7 +82,8 @@ export default function ObjectiveDetail() {
         </TabsList>
 
         <TabsContent value="updates" className="mt-6">
-          <div className="grid lg:grid-cols-3 gap-6">
+          <ProgressChart objective={objective} updates={updates} />
+          <div className="grid lg:grid-cols-3 gap-6 mt-6">
             <div className="lg:col-span-2 space-y-3">
               {updates.length === 0 ? (
                 <div className="text-sm text-[var(--ink-soft)]">No weekly updates yet.</div>
@@ -176,7 +178,7 @@ export default function ObjectiveDetail() {
 
         {(user.role === "admin" || user.role === "manager") && (
           <TabsContent value="ai" className="mt-6">
-            <AIPanel title="AI_ANALYSIS · DRI & OBJECTIVE" />
+            <AIPanel kind="objective" objectiveId={id} canRun={true} title="AI_ANALYSIS · DRI & OBJECTIVE" />
           </TabsContent>
         )}
       </Tabs>

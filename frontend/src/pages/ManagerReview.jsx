@@ -149,7 +149,7 @@ export default function ManagerReview() {
             </div>
 
             <div className="space-y-4">
-              <AIPanel title="AI_ANALYSIS · INDIVIDUAL" />
+              <AIPanel kind="individual" userId={selectedUser} objectiveId={selectedObjective} canRun={true} title="AI_ANALYSIS · INDIVIDUAL" />
               <div className="brutal-card p-5">
                 <div className="mono-label">FINAL EVALUATION</div>
                 <Textarea className="rounded-none border-black mt-2" value={review.final_evaluation}
@@ -192,7 +192,7 @@ export default function ManagerReview() {
               </div>
             </div>
             <div className="space-y-4">
-              <AIPanel title="AI_ANALYSIS · OBJECTIVE" />
+              <AIPanel kind="objective" objectiveId={selectedObjective} canRun={true} title="AI_ANALYSIS · OBJECTIVE" />
               <div className="brutal-card p-5">
                 <div className="mono-label">EVALUATE DRI</div>
                 <Textarea className="rounded-none border-black mt-2" placeholder="Final evaluation"
@@ -251,7 +251,10 @@ export default function ManagerReview() {
         </TabsContent>
 
         <TabsContent value="ai" className="mt-6">
-          <AIPanel title="AI_ANALYSIS · CROSS-CYCLE" />
+          <div className="grid lg:grid-cols-2 gap-6">
+            <AIPanel kind="objective" objectiveId={selectedObjective} canRun={true} title="AI · OBJECTIVE" />
+            <AIPanel kind="individual" userId={selectedUser} objectiveId={selectedObjective} canRun={true} title="AI · INDIVIDUAL" />
+          </div>
         </TabsContent>
       </Tabs>
     </div>
