@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { api, formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -19,32 +19,55 @@ const FIELDS = [
 
 export default function MyPlan() {
   const { user } = useAuth();
+  const isManagerOrAdmin = user.role === "admin" || user.role === "manager";
+
   const [objectives, setObjectives] = useState([]);
+  const [users, setUsers] = useState([]);
   const [plans, setPlans] = useState([]);
   const [activeId, setActiveId] = useState("");
+  const [actingAs, setActingAs] = useState(user.id);
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
 
   const load = async () => {
-    const [ob, pl] = await Promise.all([api.get("/objectives"), api.get("/plans")]);
-    const mine = ob.data.filter(o => o.dri_id === user.id || (o.contributor_ids || []).includes(user.id));
-    setObjectives(mine);
+    const [ob, pl, us] = await Promise.all([
+      api.get("/objectives"),
+      api.get("/plans"),
+      api.get("/users"),
+    ]);
+    setObjectives(ob.data);
     setPlans(pl.data);
-    if (!activeId && mine.length) setActiveId(mine[0].id);
+    setUsers(us.data);
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
+  // objectives available to the selected actingAs user
+  const relevantObjectives = useMemo(() => {
+    return objectives.filter(o =>
+      o.dri_id === actingAs || (o.contributor_ids || []).includes(actingAs)
+    );
+  }, [objectives, actingAs]);
+
+  // when actingAs changes, pick their first objective
   useEffect(() => {
-    if (!activeId) { setForm(null); return; }
-    const existing = plans.find(p => p.objective_id === activeId && p.user_id === user.id);
+    if (relevantObjectives.length && !relevantObjectives.some(o => o.id === activeId)) {
+      setActiveId(relevantObjectives[0].id);
+    } else if (!relevantObjectives.length) {
+      setActiveId("");
+    }
+  }, [relevantObjectives, activeId]);
+
+  useEffect(() => {
+    if (!activeId || !actingAs) { setForm(null); return; }
+    const existing = plans.find(p => p.objective_id === activeId && p.user_id === actingAs);
     setForm(existing || {
       objective_id: activeId,
       mission_context: "", role_in_objective: "", ownership_metric: "",
       metric_current: "", metric_target: "",
       goals: ["", "", ""], key_bets: "", risks: "", kill_list: "",
     });
-  }, [activeId, plans, user.id]);
+  }, [activeId, plans, actingAs]);
 
   const save = async () => {
     setSaving(true);
@@ -54,16 +77,19 @@ export default function MyPlan() {
         goals: (form.goals || []).filter(g => (g || "").trim()).slice(0, 3),
         objective_id: activeId,
       };
-      await api.post("/plans", payload);
+      const url = (isManagerOrAdmin && actingAs !== user.id) ? `/plans?user_id=${actingAs}` : "/plans";
+      await api.post(url, payload);
       toast.success("Plan saved");
       load();
     } catch (e) { toast.error(formatApiError(e)); }
     finally { setSaving(false); }
   };
 
-  if (!objectives.length) return (
+  if (!objectives.length && !isManagerOrAdmin) return (
     <div className="p-8"><EmptyState title="No objectives assigned" hint="Ask your admin to add you as a DRI or contributor." /></div>
   );
+
+  const selectedUser = users.find(u => u.id === actingAs);
 
   return (
     <div className="p-6 md:p-8 max-w-[1100px] mx-auto">
@@ -71,15 +97,49 @@ export default function MyPlan() {
       <h1 className="text-3xl md:text-4xl font-bold tracking-tight mt-1">Individual Planning</h1>
       <p className="text-[var(--ink-soft)] mt-2">&lt; 20 minutes. Crisp. Real.</p>
 
-      <div className="mt-6 flex items-center gap-3">
-        <div className="mono-label">OBJECTIVE</div>
-        <Select value={activeId} onValueChange={setActiveId}>
-          <SelectTrigger className="rounded-none border-black w-[360px]" data-testid="plan-objective-select"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {objectives.map(o => <SelectItem key={o.id} value={o.id}>{o.title}</SelectItem>)}
-          </SelectContent>
-        </Select>
+      <div className="mt-6 flex flex-wrap items-center gap-4">
+        {isManagerOrAdmin && (
+          <div className="flex items-center gap-2">
+            <div className="mono-label">ACTING AS</div>
+            <Select value={actingAs} onValueChange={setActingAs}>
+              <SelectTrigger className="rounded-none border-black w-[260px]" data-testid="plan-acting-as"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value={user.id}>Myself</SelectItem>
+                {users.filter(u => u.id !== user.id).map(u =>
+                  <SelectItem key={u.id} value={u.id}>
+                    {u.name} · {u.role}
+                  </SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <div className="mono-label">OBJECTIVE</div>
+          <Select value={activeId} onValueChange={setActiveId}>
+            <SelectTrigger className="rounded-none border-black w-[360px]" data-testid="plan-objective-select"><SelectValue placeholder="—" /></SelectTrigger>
+            <SelectContent>
+              {relevantObjectives.length ? relevantObjectives.map(o =>
+                <SelectItem key={o.id} value={o.id}>{o.title}</SelectItem>
+              ) : <div className="px-3 py-2 text-sm text-[var(--ink-soft)]">No objectives for this person</div>}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
+
+      {isManagerOrAdmin && selectedUser && actingAs !== user.id && (
+        <div className="mt-4 brutal-border p-3 bg-[#FFD600] text-sm flex items-center gap-2">
+          <span className="mono-label">EDITING ON BEHALF OF</span>
+          <span className="font-semibold">{selectedUser.name}</span>
+          <span className="mono-label opacity-70">· {selectedUser.role}</span>
+        </div>
+      )}
+
+      {!form && isManagerOrAdmin && !relevantObjectives.length && (
+        <div className="mt-8"><EmptyState title={`${selectedUser?.name || "This user"} is not on any objective yet`}
+          hint="Assign them as a DRI or contributor in Cycles & Objectives first." /></div>
+      )}
 
       {form && (
         <div className="mt-6 space-y-0 brutal-border border-b-0">
@@ -136,11 +196,13 @@ export default function MyPlan() {
         </div>
       )}
 
-      <div className="mt-6 flex justify-end">
-        <Button onClick={save} disabled={saving} className="rounded-none bg-black text-white" data-testid="plan-save">
-          {saving ? "Saving…" : "Save plan →"}
-        </Button>
-      </div>
+      {form && (
+        <div className="mt-6 flex justify-end">
+          <Button onClick={save} disabled={saving} className="rounded-none bg-black text-white" data-testid="plan-save">
+            {saving ? "Saving…" : (isManagerOrAdmin && actingAs !== user.id ? `Save plan for ${selectedUser?.name} →` : "Save plan →")}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

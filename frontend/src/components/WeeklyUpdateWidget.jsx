@@ -14,7 +14,7 @@ function currentWeekISO() {
   return `${d.getFullYear()}-W${String(weekNo).padStart(2, "0")}`;
 }
 
-export default function WeeklyUpdateWidget({ objective, onSubmitted }) {
+export default function WeeklyUpdateWidget({ objective, onSubmitted, actingAsUserId }) {
   const [status, setStatus] = useState("green");
   const [text, setText] = useState("");
   const [blockers, setBlockers] = useState("");
@@ -25,13 +25,14 @@ export default function WeeklyUpdateWidget({ objective, onSubmitted }) {
     if (!text.trim()) { toast.error("Please add a short update"); return; }
     setSaving(true);
     try {
-      await api.post("/updates", {
+      const url = actingAsUserId ? `/updates?user_id=${actingAsUserId}` : "/updates";
+      await api.post(url, {
         objective_id: objective.id,
         week: currentWeekISO(),
         status, update_text: text.trim(),
         blockers, progress,
       });
-      toast.success("Weekly update submitted");
+      toast.success(actingAsUserId ? "Update submitted on their behalf" : "Weekly update submitted");
       setText(""); setBlockers(""); setProgress("");
       onSubmitted?.();
     } catch (e) {

@@ -504,11 +504,18 @@ async def list_plans(objective_id: Optional[str] = None, user_id: Optional[str] 
 
 
 @api.post("/plans")
-async def upsert_plan(payload: IndividualPlanPayload, user: dict = Depends(get_current_user)):
+async def upsert_plan(payload: IndividualPlanPayload,
+                      user_id: Optional[str] = None,
+                      user: dict = Depends(get_current_user)):
+    target_user_id = user["id"]
+    if user_id and user_id != user["id"]:
+        if user["role"] not in ("admin", "manager"):
+            raise HTTPException(status_code=403, detail="Only admin/manager can edit others' plans")
+        target_user_id = user_id
     doc = payload.model_dump()
-    doc["user_id"] = user["id"]
+    doc["user_id"] = target_user_id
     doc["updated_at"] = now_utc()
-    existing = await db.plans.find_one({"user_id": user["id"], "objective_id": payload.objective_id})
+    existing = await db.plans.find_one({"user_id": target_user_id, "objective_id": payload.objective_id})
     if existing:
         await db.plans.update_one({"id": existing["id"]}, {"$set": doc})
         return await db.plans.find_one({"id": existing["id"]}, {"_id": 0})
@@ -534,10 +541,18 @@ async def list_updates(objective_id: Optional[str] = None, user_id: Optional[str
 
 
 @api.post("/updates")
-async def create_update(payload: WeeklyUpdatePayload, user: dict = Depends(get_current_user)):
+async def create_update(payload: WeeklyUpdatePayload,
+                        user_id: Optional[str] = None,
+                        user: dict = Depends(get_current_user)):
+    target_user_id = user["id"]
+    if user_id and user_id != user["id"]:
+        if user["role"] not in ("admin", "manager"):
+            raise HTTPException(status_code=403, detail="Only admin/manager can submit on others' behalf")
+        target_user_id = user_id
     doc = payload.model_dump()
     doc["id"] = str(uuid.uuid4())
-    doc["user_id"] = user["id"]
+    doc["user_id"] = target_user_id
+    doc["submitted_by"] = user["id"]
     doc["created_at"] = now_utc()
     await db.updates.insert_one(doc)
     doc.pop("_id", None)
