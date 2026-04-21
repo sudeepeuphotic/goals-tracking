@@ -32,9 +32,9 @@ JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALGORITHM = "HS256"
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
 
-# Brute force config
-MAX_LOGIN_ATTEMPTS = 5
-LOCKOUT_MINUTES = 15
+# Brute force config (set MAX_LOGIN_ATTEMPTS=0 in .env to disable the lockout entirely)
+MAX_LOGIN_ATTEMPTS = int(os.environ.get('MAX_LOGIN_ATTEMPTS', '0'))
+LOCKOUT_MINUTES = int(os.environ.get('LOCKOUT_MINUTES', '15'))
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -111,6 +111,8 @@ def require_role(*roles):
 
 # ============ BRUTE FORCE HELPERS ============
 async def is_locked_out(identifier: str) -> bool:
+    if MAX_LOGIN_ATTEMPTS <= 0:
+        return False
     rec = await db.login_attempts.find_one({"identifier": identifier})
     if not rec:
         return False
@@ -121,6 +123,8 @@ async def is_locked_out(identifier: str) -> bool:
 
 
 async def record_failure(identifier: str):
+    if MAX_LOGIN_ATTEMPTS <= 0:
+        return
     rec = await db.login_attempts.find_one({"identifier": identifier})
     count = (rec.get("count", 0) if rec else 0) + 1
     update = {"identifier": identifier, "count": count, "last_at": now_utc()}
