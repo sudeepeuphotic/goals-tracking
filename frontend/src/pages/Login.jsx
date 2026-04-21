@@ -25,7 +25,7 @@ export default function Login() {
     e.preventDefault();
     setSubmitting(true);
     try {
-      await login(email, password);
+      await login(email.trim().toLowerCase(), password);
       nav("/");
     } catch (err) {
       toast.error(err?.response?.data?.detail || "Login failed");
