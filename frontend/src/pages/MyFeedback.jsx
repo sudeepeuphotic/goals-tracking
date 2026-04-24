@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import EmptyState from "@/components/EmptyState";
+import { asArray } from "@/lib/safe";
 
 export default function MyFeedback() {
   const [data, setData] = useState(null);
@@ -8,7 +9,7 @@ export default function MyFeedback() {
   useEffect(() => {
     (async () => {
       const r = await api.get("/feedback/my-dri-view");
-      setData(r.data);
+      setData(asArray(r.data));
     })();
   }, []);
 

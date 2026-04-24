@@ -15,6 +15,7 @@ import ManagerReview from "@/pages/ManagerReview";
 import AdminUsers from "@/pages/AdminUsers";
 import MyFeedback from "@/pages/MyFeedback";
 import ResetPassword from "@/pages/ResetPassword";
+import Signup from "@/pages/Signup";
 
 function Protected({ children }) {
   const { user } = useAuth();
@@ -27,6 +28,7 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/signup" element={<Signup />} />
       <Route path="/reset-password" element={<ResetPassword />} />
       <Route
         path="/"

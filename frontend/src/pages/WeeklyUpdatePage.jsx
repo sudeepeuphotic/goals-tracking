@@ -7,6 +7,8 @@ import EmptyState from "@/components/EmptyState";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { isManagerOrAdmin } from "@/lib/roles";
+import { asArray } from "@/lib/safe";
 
 function currentWeekISO() {
   const d = new Date();
@@ -19,7 +21,7 @@ function currentWeekISO() {
 
 export default function WeeklyUpdatePage() {
   const { user } = useAuth();
-  const isManagerOrAdmin = user.role === "admin" || user.role === "manager";
+  const userIsManagerOrAdmin = isManagerOrAdmin(user);
 
   const [objectives, setObjectives] = useState([]);
   const [users, setUsers] = useState([]);
@@ -34,16 +36,16 @@ export default function WeeklyUpdatePage() {
       api.get("/users"),
       api.get("/users/manageable"),
     ]);
-    setObjectives(ob.data);
-    setUsers(us.data);
-    setManageable(mg.data);
+    setObjectives(asArray(ob.data));
+    setUsers(asArray(us.data));
+    setManageable(asArray(mg.data));
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
   // objectives relevant to actingAs
   const relevantObjectives = useMemo(() => objectives.filter(o =>
-    isManagerOrAdmin ? true : (o.dri_id === user.id || (o.contributor_ids || []).includes(user.id))
-  ), [objectives, isManagerOrAdmin, user.id]);
+    userIsManagerOrAdmin ? true : (o.dri_id === user.id || (o.contributor_ids || []).includes(user.id))
+  ), [objectives, userIsManagerOrAdmin, user.id]);
 
   useEffect(() => {
     if (relevantObjectives.length && !relevantObjectives.some(o => o.id === activeId)) {
@@ -57,7 +59,7 @@ export default function WeeklyUpdatePage() {
     (async () => {
       const params = { objective_id: activeId };
       const r = await api.get("/updates", { params });
-      setAllUpdates(r.data);
+      setAllUpdates(asArray(r.data));
     })();
   }, [activeId]);
 
@@ -94,7 +96,7 @@ export default function WeeklyUpdatePage() {
       <h1 className="text-3xl md:text-4xl font-bold tracking-tight mt-1">Under 3 minutes.</h1>
 
       <div className="mt-6 flex flex-wrap items-center gap-4">
-        {isManagerOrAdmin && (
+        {userIsManagerOrAdmin && (
           <div className="flex items-center gap-2">
             <div className="mono-label">ACTING AS</div>
             <Select value={actingAs} onValueChange={setActingAs}>
@@ -121,7 +123,7 @@ export default function WeeklyUpdatePage() {
         </div>
       </div>
 
-      {isManagerOrAdmin && selectedUser && actingAs !== user.id && (
+      {userIsManagerOrAdmin && selectedUser && actingAs !== user.id && (
         <div className="mt-4 brutal-border p-3 bg-[#FFD600] text-sm flex items-center gap-2">
           <span className="mono-label">SUBMITTING ON BEHALF OF</span>
           <span className="font-semibold">{selectedUser.name}</span>
@@ -131,7 +133,7 @@ export default function WeeklyUpdatePage() {
 
       <div className="grid lg:grid-cols-3 gap-6 mt-6">
         <div className="lg:col-span-2 space-y-3">
-          {isManagerOrAdmin ? (
+          {userIsManagerOrAdmin ? (
             <>
               <div className="mono-label">TEAM TRACKER · {currentWeekISO()}</div>
               <div className="brutal-border border-b-0 border-r-0" data-testid="team-tracker-grid">
@@ -207,7 +209,7 @@ export default function WeeklyUpdatePage() {
                 // refresh updates
                 (async () => {
                   const r = await api.get("/updates", { params: { objective_id: activeId } });
-                  setAllUpdates(r.data);
+                  setAllUpdates(asArray(r.data));
                 })();
               }} />
           )}

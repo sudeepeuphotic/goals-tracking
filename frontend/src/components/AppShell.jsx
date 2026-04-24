@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
+import { isAdmin, isManagerOrAdmin } from "@/lib/roles";
 import {
   LayoutDashboard, Target, FileText, MessageSquare, Sparkles,
   Users, LogOut, BookOpen, Gauge, Inbox
@@ -38,9 +39,8 @@ export default function AppShell() {
 
   if (!user) return null;
 
-  const role = user.role;
-  const isAdmin = role === "admin";
-  const isManager = role === "manager" || isAdmin;
+  const userIsAdmin = isAdmin(user);
+  const userIsManager = isManagerOrAdmin(user);
 
   const onLogout = async () => {
     await logout();
@@ -67,8 +67,8 @@ export default function AppShell() {
 
           <div className="mono-label px-3 pt-5 pb-2">TEAM</div>
           <NavItem to="/cycles" icon={Sparkles} label="Cycles & Objectives" testId="nav-cycles" />
-          {isManager && <NavItem to="/manager" icon={FileText} label="Manager Review" testId="nav-manager" />}
-          {isAdmin && <NavItem to="/admin/users" icon={Users} label="Users" testId="nav-users" />}
+          {userIsManager && <NavItem to="/manager" icon={FileText} label="Manager Review" testId="nav-manager" />}
+          {userIsAdmin && <NavItem to="/admin/users" icon={Users} label="Users" testId="nav-users" />}
         </nav>
 
         <div className="p-3 brutal-border border-b-0 border-l-0 border-r-0">

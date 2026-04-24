@@ -7,11 +7,14 @@ load_dotenv(ROOT_DIR / '.env')
 import os
 import uuid
 import logging
+import json
 import bcrypt
 import jwt
 import secrets
+import boto3
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal
+from botocore.exceptions import ClientError, NoCredentialsError
 
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +34,27 @@ db = client[db_name]
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALGORITHM = "HS256"
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+CORS_ORIGINS = [o.strip() for o in os.environ.get(
+    "CORS_ORIGINS",
+    f"{FRONTEND_URL},http://localhost:3000"
+).split(",") if o.strip()]
+COGNITO_ENABLED = os.environ.get("COGNITO_ENABLED", "false").lower() == "true"
+COGNITO_REGION = os.environ.get("COGNITO_REGION", "")
+COGNITO_CLIENT_ID = os.environ.get("COGNITO_CLIENT_ID", "")
+COGNITO_USER_POOL_ID = os.environ.get("COGNITO_USER_POOL_ID", "")
+COGNITO_ROLE_ATTRIBUTE = os.environ.get("COGNITO_ROLE_ATTRIBUTE", "custom:role")
+DEFAULT_ROLE_GROUP_MAP = {
+    "admin": "admin",
+    "manager": "manager",
+    "dri": "dri",
+    "contributor": "contributor",
+}
+try:
+    COGNITO_GROUP_ROLE_MAP = json.loads(os.environ.get("COGNITO_GROUP_ROLE_MAP", json.dumps(DEFAULT_ROLE_GROUP_MAP)))
+except json.JSONDecodeError:
+    COGNITO_GROUP_ROLE_MAP = DEFAULT_ROLE_GROUP_MAP
+SUPPORTED_ROLES = {"admin", "manager", "dri", "contributor"}
+ROLE_PRIORITY = ["admin", "manager", "dri", "contributor"]
 
 # Brute force config (set MAX_LOGIN_ATTEMPTS=0 in .env to disable the lockout entirely)
 MAX_LOGIN_ATTEMPTS = int(os.environ.get('MAX_LOGIN_ATTEMPTS', '0'))
@@ -38,6 +62,7 @@ LOCKOUT_MINUTES = int(os.environ.get('LOCKOUT_MINUTES', '15'))
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+cognito_client = boto3.client("cognito-idp", region_name=COGNITO_REGION) if COGNITO_ENABLED else None
 
 
 # ============ HELPERS ============
@@ -79,26 +104,180 @@ def clean_user(u: dict) -> dict:
     return u
 
 
-async def get_current_user(request: Request) -> dict:
-    token = request.cookies.get("access_token")
+def normalize_role(role: Optional[str]) -> Optional[str]:
+    if not role:
+        return None
+    normalized = role.strip().lower()
+    return normalized if normalized in SUPPORTED_ROLES else None
+
+
+def derive_role_from_cognito(attrs: dict, groups: List[str]) -> Optional[str]:
+    attr_role = normalize_role(attrs.get(COGNITO_ROLE_ATTRIBUTE) or attrs.get("role"))
+    if attr_role:
+        return attr_role
+
+    mapped_roles = []
+    group_map = {k.lower(): v for k, v in COGNITO_GROUP_ROLE_MAP.items()}
+    for group in groups:
+        mapped = normalize_role(group_map.get(group.lower()))
+        if mapped:
+            mapped_roles.append(mapped)
+    if not mapped_roles:
+        return None
+    mapped_roles.sort(key=lambda r: ROLE_PRIORITY.index(r))
+    return mapped_roles[0]
+
+
+def decode_unverified_claims(token: str) -> dict:
     if not token:
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            token = auth[7:]
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        return {}
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        if payload.get("type") != "access":
-            raise HTTPException(status_code=401, detail="Invalid token type")
-        user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
-        if not user:
-            raise HTTPException(status_code=401, detail="User not found")
-        return user
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
+        return jwt.decode(token, options={"verify_signature": False, "verify_exp": False})
     except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        return {}
+
+
+def extract_groups_from_claims(claims: dict) -> List[str]:
+    groups = claims.get("cognito:groups") or []
+    if isinstance(groups, list):
+        return [str(g) for g in groups]
+    if isinstance(groups, str):
+        return [groups]
+    return []
+
+
+def extract_cognito_username(claims: dict, attrs: dict, fallback_email: str) -> str:
+    return (
+        claims.get("cognito:username")
+        or attrs.get("preferred_username")
+        or attrs.get("email")
+        or fallback_email
+    )
+
+
+def merge_user_doc(existing: Optional[dict], email: str, name: str, role: Optional[str]) -> dict:
+    doc = existing.copy() if existing else {
+        "id": str(uuid.uuid4()),
+        "email": email,
+        "created_at": now_utc(),
+    }
+    doc["name"] = name or doc.get("name") or email.split("@")[0]
+    if role:
+        doc["role"] = role
+    elif not doc.get("role"):
+        doc["role"] = "contributor"
+    return doc
+
+
+async def fetch_cognito_groups(username: str) -> List[str]:
+    if not username or not COGNITO_USER_POOL_ID:
+        return []
+    try:
+        resp = cognito_client.admin_list_groups_for_user(
+            Username=username,
+            UserPoolId=COGNITO_USER_POOL_ID,
+        )
+        return [g.get("GroupName") for g in resp.get("Groups", []) if g.get("GroupName")]
+    except NoCredentialsError:
+        logger.warning("Skipping Cognito group lookup: AWS credentials not configured")
+        return []
+    except ClientError as exc:
+        logger.warning("Unable to list Cognito groups for %s: %s", username, exc)
+        return []
+
+
+async def upsert_user_from_cognito(
+    *,
+    email: str,
+    name: str,
+    attrs: dict,
+    groups: List[str],
+) -> dict:
+    existing = await db.users.find_one({"email": email}, {"_id": 0, "password_hash": 0})
+    role = derive_role_from_cognito(attrs, groups) or (existing.get("role") if existing else None)
+    merged = merge_user_doc(existing, email=email, name=name, role=role)
+    await db.users.update_one({"email": email}, {"$set": merged}, upsert=True)
+    return clean_user(merged)
+
+
+async def get_current_user(request: Request) -> dict:
+    cookie_token = request.cookies.get("access_token")
+    auth_header = request.headers.get("Authorization", "")
+    bearer_token = auth_header[7:] if auth_header.startswith("Bearer ") else None
+
+    # 1) Try existing app JWT flow first (cookie or bearer).
+    token = cookie_token or bearer_token
+    if token:
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            if payload.get("type") != "access":
+                raise HTTPException(status_code=401, detail="Invalid token type")
+            user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+            if not user:
+                raise HTTPException(status_code=401, detail="User not found")
+            return user
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Token expired")
+        except jwt.InvalidTokenError:
+            # fall through to Cognito bearer validation when enabled
+            pass
+
+    # 2) Cognito token validation (bearer only) for migration path.
+    if COGNITO_ENABLED and bearer_token:
+        try:
+            resp = cognito_client.get_user(AccessToken=bearer_token)
+            attrs = {a["Name"]: a["Value"] for a in resp.get("UserAttributes", [])}
+            email = attrs.get("email", "").lower()
+            if not email:
+                raise HTTPException(status_code=401, detail="Invalid Cognito token: email missing")
+            claims = decode_unverified_claims(bearer_token)
+            groups = extract_groups_from_claims(claims)
+            username = extract_cognito_username(claims, attrs, email)
+            if not groups:
+                groups = await fetch_cognito_groups(username)
+            user = await upsert_user_from_cognito(
+                email=email,
+                name=attrs.get("name", email.split("@")[0]),
+                attrs=attrs,
+                groups=groups,
+            )
+            return user
+        except ClientError:
+            raise HTTPException(status_code=401, detail="Invalid Cognito token")
+
+    raise HTTPException(status_code=401, detail="Not authenticated")
+
+
+async def authenticate_with_cognito(email: str, password: str) -> dict:
+    if not COGNITO_ENABLED or not cognito_client or not COGNITO_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="Cognito auth is not configured")
+    try:
+        auth_response = cognito_client.initiate_auth(
+            ClientId=COGNITO_CLIENT_ID,
+            AuthFlow="USER_PASSWORD_AUTH",
+            AuthParameters={"USERNAME": email, "PASSWORD": password},
+        )
+        result = auth_response.get("AuthenticationResult", {})
+        access_token = result.get("AccessToken")
+        id_token = result.get("IdToken")
+        if not access_token:
+            raise HTTPException(status_code=401, detail="Cognito login failed")
+        user_response = cognito_client.get_user(AccessToken=access_token)
+        attrs = {a["Name"]: a["Value"] for a in user_response.get("UserAttributes", [])}
+        claims = decode_unverified_claims(id_token)
+        groups = extract_groups_from_claims(claims)
+        username = extract_cognito_username(claims, attrs, email)
+        if not groups:
+            groups = await fetch_cognito_groups(username)
+        return {
+            "email": attrs.get("email", email).lower(),
+            "name": attrs.get("name", email.split("@")[0]),
+            "attrs": attrs,
+            "groups": groups,
+        }
+    except ClientError as exc:
+        logger.warning("Cognito auth failed for %s: %s", email, exc)
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
 def require_role(*roles):
@@ -339,10 +518,19 @@ async def login(payload: UserLogin, request: Request, response: Response):
     identifier = f"{ip}:{email}"
     if await is_locked_out(identifier):
         raise HTTPException(status_code=429, detail=f"Too many attempts. Try again in {LOCKOUT_MINUTES} minutes.")
-    user = await db.users.find_one({"email": email})
-    if not user or not verify_password(payload.password, user["password_hash"]):
-        await record_failure(identifier)
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+    if COGNITO_ENABLED:
+        cognito_user = await authenticate_with_cognito(email, payload.password)
+        user = await upsert_user_from_cognito(
+            email=cognito_user["email"],
+            name=cognito_user["name"],
+            attrs=cognito_user["attrs"],
+            groups=cognito_user["groups"],
+        )
+    else:
+        user = await db.users.find_one({"email": email})
+        if not user or not verify_password(payload.password, user["password_hash"]):
+            await record_failure(identifier)
+            raise HTTPException(status_code=401, detail="Invalid credentials")
     await clear_failures(identifier)
     access = create_access_token(user["id"], email)
     refresh = create_refresh_token(user["id"])
@@ -409,6 +597,11 @@ async def me(user: dict = Depends(get_current_user)):
     return user
 
 
+@api.get("/auth/roles")
+async def auth_roles(_: dict = Depends(get_current_user)):
+    return {"roles": ROLE_PRIORITY}
+
+
 @api.post("/auth/refresh")
 async def refresh_token(request: Request, response: Response):
     token = request.cookies.get("refresh_token")
@@ -457,6 +650,7 @@ async def list_manageable(user: dict = Depends(get_current_user)):
 
 
 @api.patch("/users/{user_id}")
+@api.put("/users/{user_id}")
 async def patch_user(user_id: str, payload: UserPatch, _: dict = Depends(require_role("admin"))):
     existing = await db.users.find_one({"id": user_id})
     if not existing:
@@ -527,6 +721,7 @@ async def create_cycle(payload: FocusCycleCreate, _: dict = Depends(require_role
 
 
 @api.patch("/cycles/{cycle_id}")
+@api.put("/cycles/{cycle_id}")
 async def update_cycle(cycle_id: str, payload: FocusCycleUpdate, _: dict = Depends(require_role("admin"))):
     await db.cycles.update_one({"id": cycle_id}, {"$set": {"status": payload.status}})
     c = await db.cycles.find_one({"id": cycle_id}, {"_id": 0})
@@ -564,6 +759,7 @@ async def create_objective(payload: ObjectiveCreate, _: dict = Depends(require_r
 
 
 @api.patch("/objectives/{objective_id}")
+@api.put("/objectives/{objective_id}")
 async def update_objective(objective_id: str, payload: ObjectiveUpdate, user: dict = Depends(get_current_user)):
     obj = await db.objectives.find_one({"id": objective_id})
     if not obj:
@@ -648,6 +844,7 @@ async def add_task(plan_id: str, payload: TaskPayload, user: dict = Depends(get_
 
 
 @api.patch("/plans/{plan_id}/tasks/{task_id}")
+@api.put("/plans/{plan_id}/tasks/{task_id}")
 async def patch_task(plan_id: str, task_id: str, payload: TaskPatch,
                      user: dict = Depends(get_current_user)):
     plan = await db.plans.find_one({"id": plan_id})
@@ -903,110 +1100,7 @@ async def seed_if_empty():
             "created_at": now_utc(),
         })
         logger.info("Admin seeded")
-
-    # demo users (idempotent) + hierarchy
-    demo = [
-        ("manager@noshrobotics.co", "password123", "Morgan Lee", "manager"),
-        ("dri@noshrobotics.co", "password123", "Dana Rao", "dri"),
-        ("alice@noshrobotics.co", "password123", "Alice Chen", "contributor"),
-        ("bob@noshrobotics.co", "password123", "Bob Singh", "contributor"),
-    ]
-    user_ids = {}
-    for email, pw, name, role in demo:
-        u = await db.users.find_one({"email": email})
-        if not u:
-            uid = str(uuid.uuid4())
-            await db.users.insert_one({
-                "id": uid, "email": email, "password_hash": hash_password(pw),
-                "name": name, "role": role, "manager_id": None, "created_at": now_utc(),
-            })
-            user_ids[email] = uid
-        else:
-            user_ids[email] = u["id"]
-
-    # Hierarchy: Morgan -> Dana -> Alice & Bob. Morgan reports to admin.
-    admin_user = await db.users.find_one({"email": admin_email})
-    hierarchy = [
-        ("manager@noshrobotics.co", admin_user["id"] if admin_user else None),
-        ("dri@noshrobotics.co", user_ids.get("manager@noshrobotics.co")),
-        ("alice@noshrobotics.co", user_ids.get("dri@noshrobotics.co")),
-        ("bob@noshrobotics.co", user_ids.get("dri@noshrobotics.co")),
-    ]
-    for email, mgr_id in hierarchy:
-        if mgr_id:
-            await db.users.update_one({"email": email, "manager_id": None},
-                                      {"$set": {"manager_id": mgr_id}})
-
-    # demo cycle + objectives
-    if await db.cycles.count_documents({}) == 0:
-        cycle_id = str(uuid.uuid4())
-        await db.cycles.insert_one({
-            "id": cycle_id,
-            "name": "Q1 2026 — Growth",
-            "start_date": "2026-01-01",
-            "end_date": "2026-03-31",
-            "status": "active",
-            "created_at": now_utc(),
-        })
-        dri_id = user_ids["dri@noshrobotics.co"]
-        alice = user_ids["alice@noshrobotics.co"]
-        bob = user_ids["bob@noshrobotics.co"]
-
-        obj1_id = str(uuid.uuid4())
-        await db.objectives.insert_one({
-            "id": obj1_id,
-            "cycle_id": cycle_id,
-            "title": "Ship self-serve onboarding v2",
-            "description": "Reduce time-to-first-value and lift activation rate for new workspaces.",
-            "dri_id": dri_id,
-            "success_metric": "Activation rate (D7)",
-            "current_value": "34%",
-            "target_value": "55%",
-            "contributor_ids": [alice, bob],
-            "rigor_questions": [
-                "What would you do differently if you had to ship this in half the time?",
-                "Which assumption is most likely to be wrong?",
-            ],
-            "created_at": now_utc(),
-        })
-
-        obj2_id = str(uuid.uuid4())
-        await db.objectives.insert_one({
-            "id": obj2_id,
-            "cycle_id": cycle_id,
-            "title": "Lift retention in the first 30 days",
-            "description": "Drive repeat usage via messaging, habit loops, and feature discovery.",
-            "dri_id": dri_id,
-            "success_metric": "D30 retention",
-            "current_value": "18%",
-            "target_value": "28%",
-            "contributor_ids": [alice],
-            "rigor_questions": [
-                "What is the single highest-leverage lever you believe in?",
-            ],
-            "created_at": now_utc(),
-        })
-
-        # a plan + weekly update for Alice
-        await db.plans.insert_one({
-            "id": str(uuid.uuid4()), "user_id": alice, "objective_id": obj1_id,
-            "mission_context": "Own activation telemetry and experiment ingestion.",
-            "role_in_objective": "Contributor — experiments and analytics",
-            "ownership_metric": "Experiment velocity",
-            "metric_current": "2/week", "metric_target": "5/week",
-            "goals": ["Instrument activation funnel", "Ship 3 growth experiments", "Document playbook"],
-            "key_bets": "Funnel clarity unlocks experiment throughput",
-            "risks": "Data pipeline latency", "kill_list": "Legacy UTM reports",
-            "created_at": now_utc(), "updated_at": now_utc(),
-        })
-        await db.updates.insert_one({
-            "id": str(uuid.uuid4()), "user_id": alice, "objective_id": obj1_id,
-            "week": "2026-W05", "status": "yellow",
-            "update_text": "Funnel instrumentation 70% done. Waiting on backend events spec. Two experiments queued.",
-            "blockers": "Backend events spec", "progress": "70%", "priority_shift": "",
-            "created_at": now_utc(),
-        })
-        logger.info("Demo data seeded")
+    # Intentionally no additional demo users or data.
 
 
 @app.on_event("startup")
@@ -1030,7 +1124,7 @@ app.include_router(api)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL, "http://localhost:3000"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

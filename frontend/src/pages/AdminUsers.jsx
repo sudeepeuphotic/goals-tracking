@@ -10,15 +10,24 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { ROLE } from "@/lib/roles";
+import { asArray } from "@/lib/safe";
 
 export default function AdminUsers() {
+  const fallbackRoles = [ROLE.ADMIN, ROLE.MANAGER, ROLE.DRI, ROLE.CONTRIBUTOR];
   const [users, setUsers] = useState([]);
+  const [roles, setRoles] = useState(fallbackRoles);
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ email: "", password: "", name: "", role: "contributor" });
+  const [form, setForm] = useState({ email: "", password: "", name: "", role: ROLE.CONTRIBUTOR });
 
   const load = async () => {
-    const { data } = await api.get("/users");
-    setUsers(data);
+    const [usersRes, rolesRes] = await Promise.all([
+      api.get("/users"),
+      api.get("/auth/roles").catch(() => ({ data: { roles: fallbackRoles } })),
+    ]);
+    setUsers(asArray(usersRes.data));
+    const serverRoles = rolesRes?.data?.roles;
+    setRoles(Array.isArray(serverRoles) && serverRoles.length > 0 ? serverRoles : fallbackRoles);
   };
   useEffect(() => { load(); }, []);
 
@@ -27,7 +36,7 @@ export default function AdminUsers() {
       await api.post("/users", form);
       toast.success("User created");
       setOpen(false);
-      setForm({ email: "", password: "", name: "", role: "contributor" });
+      setForm({ email: "", password: "", name: "", role: ROLE.CONTRIBUTOR });
       load();
     } catch (e) { toast.error(formatApiError(e)); }
   };
@@ -79,7 +88,7 @@ export default function AdminUsers() {
                 <Select value={form.role} onValueChange={v => setForm({ ...form, role: v })}>
                   <SelectTrigger className="rounded-none border-black mt-1" data-testid="u-role"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {["admin", "manager", "dri", "contributor"].map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                    {roles.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -107,7 +116,7 @@ export default function AdminUsers() {
               <Select value={u.role} onValueChange={v => updateRole(u.id, v)}>
                 <SelectTrigger className="rounded-none border-black h-8 text-xs" data-testid={`role-${u.id}`}><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {["admin", "manager", "dri", "contributor"].map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                  {roles.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>

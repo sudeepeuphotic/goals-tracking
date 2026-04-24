@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import EmptyState from "@/components/EmptyState";
+import { asArray } from "@/lib/safe";
 
 const IND_FIELDS = [
   ["goal_outcomes", "Goal outcomes — what happened on each goal?"],
@@ -35,13 +36,18 @@ const DRI_FIELDS = [
   ["ceo_question_response", "CEO question"],
 ];
 
+const REFLECTION_MODE = {
+  INDIVIDUAL: "individual",
+  DRI: "dri",
+};
+
 export default function Reflection() {
   const { user } = useAuth();
   const [objectives, setObjectives] = useState([]);
   const [activeId, setActiveId] = useState("");
   const [individual, setIndividual] = useState(null);
   const [driRef, setDriRef] = useState(null);
-  const [mode, setMode] = useState("individual");
+  const [mode, setMode] = useState(REFLECTION_MODE.INDIVIDUAL);
 
   const load = async () => {
     const [ob, ir, dr] = await Promise.all([
@@ -49,13 +55,16 @@ export default function Reflection() {
       api.get("/reflections/individual").catch(()=>({data:[]})),
       api.get("/reflections/dri").catch(()=>({data:[]})),
     ]);
-    const mine = ob.data.filter(o => o.dri_id === user.id || (o.contributor_ids || []).includes(user.id));
+    const objectivesData = asArray(ob.data);
+    const indData = asArray(ir.data);
+    const driData = asArray(dr.data);
+    const mine = objectivesData.filter(o => o.dri_id === user.id || (o.contributor_ids || []).includes(user.id));
     setObjectives(mine);
     if (!activeId && mine.length) setActiveId(mine[0].id);
 
     const active = mine.find(o => o.id === (activeId || mine[0]?.id));
     if (!active) return;
-    const ind = ir.data.find(r => r.objective_id === active.id && r.user_id === user.id);
+    const ind = indData.find(r => r.objective_id === active.id && r.user_id === user.id);
     setIndividual(ind || {
       objective_id: active.id,
       goal_outcomes: "", contribution_to_objective: "", what_moved_metric: "",
@@ -64,7 +73,7 @@ export default function Reflection() {
       rigor_answers: Object.fromEntries((active.rigor_questions || []).map(q => [q, ""])),
     });
     if (active.dri_id === user.id) {
-      const d = dr.data.find(r => r.objective_id === active.id);
+      const d = driData.find(r => r.objective_id === active.id);
       setDriRef(d || {
         objective_id: active.id,
         objective_outcome: "achieved",
@@ -74,7 +83,7 @@ export default function Reflection() {
       });
     } else {
       setDriRef(null);
-      if (mode === "dri") setMode("individual");
+      if (mode === REFLECTION_MODE.DRI) setMode(REFLECTION_MODE.INDIVIDUAL);
     }
   };
 
@@ -112,13 +121,13 @@ export default function Reflection() {
         </Select>
         {active?.dri_id === user.id && (
           <div className="flex brutal-border" data-testid="refl-mode-toggle">
-            <button onClick={() => setMode("individual")} className={`px-3 py-1 text-xs font-mono ${mode === "individual" ? "bg-black text-white" : "bg-white"}`}>INDIVIDUAL</button>
-            <button onClick={() => setMode("dri")} className={`px-3 py-1 text-xs font-mono border-l border-black ${mode === "dri" ? "bg-black text-white" : "bg-white"}`}>DRI</button>
+            <button onClick={() => setMode(REFLECTION_MODE.INDIVIDUAL)} className={`px-3 py-1 text-xs font-mono ${mode === REFLECTION_MODE.INDIVIDUAL ? "bg-black text-white" : "bg-white"}`}>INDIVIDUAL</button>
+            <button onClick={() => setMode(REFLECTION_MODE.DRI)} className={`px-3 py-1 text-xs font-mono border-l border-black ${mode === REFLECTION_MODE.DRI ? "bg-black text-white" : "bg-white"}`}>DRI</button>
           </div>
         )}
       </div>
 
-      {mode === "individual" && individual && (
+      {mode === REFLECTION_MODE.INDIVIDUAL && individual && (
         <div className="mt-6 brutal-border border-r-0 border-b-0">
           {IND_FIELDS.map(([k, label]) => (
             <div key={k} className="p-5 brutal-border border-t-0 border-l-0 border-r-0 bg-white">
@@ -150,7 +159,7 @@ export default function Reflection() {
         </div>
       )}
 
-      {mode === "dri" && driRef && (
+      {mode === REFLECTION_MODE.DRI && driRef && (
         <div className="mt-6 brutal-border border-r-0 border-b-0">
           <div className="p-5 brutal-border border-t-0 border-l-0 border-r-0 bg-white">
             <Label className="mono-label">Objective outcome</Label>

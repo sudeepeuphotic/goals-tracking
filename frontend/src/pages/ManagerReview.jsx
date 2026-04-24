@@ -12,6 +12,8 @@ import {
 import StatusLight from "@/components/StatusLight";
 import AIPanel from "@/components/AIPanel";
 import { toast } from "sonner";
+import { isManagerOrAdmin, ROLE } from "@/lib/roles";
+import { asArray } from "@/lib/safe";
 
 export default function ManagerReview() {
   const { user } = useAuth();
@@ -30,11 +32,14 @@ export default function ManagerReview() {
 
   const load = async () => {
     const [us, ob, cy] = await Promise.all([api.get("/users"), api.get("/objectives"), api.get("/cycles")]);
-    setUsers(us.data);
-    setObjectives(ob.data);
-    setCycles(cy.data);
-    if (!selectedUser && us.data.length) setSelectedUser(us.data.find(u => u.role !== "admin")?.id || us.data[0].id);
-    if (!selectedObjective && ob.data.length) setSelectedObjective(ob.data[0].id);
+    const usersData = asArray(us.data);
+    const objectivesData = asArray(ob.data);
+    const cyclesData = asArray(cy.data);
+    setUsers(usersData);
+    setObjectives(objectivesData);
+    setCycles(cyclesData);
+    if (!selectedUser && usersData.length) setSelectedUser(usersData.find(u => u.role !== ROLE.ADMIN)?.id || usersData[0].id);
+    if (!selectedObjective && objectivesData.length) setSelectedObjective(objectivesData[0].id);
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
@@ -46,9 +51,9 @@ export default function ManagerReview() {
         api.get("/updates", { params: { user_id: selectedUser } }),
         api.get("/reflections/individual", { params: { user_id: selectedUser } }),
       ]);
-      setPlans(pl.data);
-      setUpdates(up.data);
-      setIndRefls(ir.data);
+      setPlans(asArray(pl.data));
+      setUpdates(asArray(up.data));
+      setIndRefls(asArray(ir.data));
     })();
   }, [selectedUser]);
 
@@ -60,8 +65,8 @@ export default function ManagerReview() {
         api.get("/feedback", { params: { objective_id: selectedObjective } }),
         api.get("/feedback/summary", { params: { objective_id: selectedObjective } }),
       ]);
-      setDriRefls(dr.data);
-      setFeedback(fb.data);
+      setDriRefls(asArray(dr.data));
+      setFeedback(asArray(fb.data));
       setSummary(sm.data);
     })();
   }, [selectedObjective]);
@@ -82,7 +87,7 @@ export default function ManagerReview() {
     } catch (e) { toast.error(formatApiError(e)); }
   };
 
-  if (!(user.role === "manager" || user.role === "admin")) {
+  if (!isManagerOrAdmin(user)) {
     return <div className="p-8 mono-label">Manager or admin only.</div>;
   }
 

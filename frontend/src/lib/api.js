@@ -1,12 +1,31 @@
 import axios from "axios";
+import { getAuthToken } from "@/lib/authToken";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-export const API = `${BACKEND_URL}/api`;
+function normalizeBaseUrl(rawUrl) {
+  if (!rawUrl) return "";
+  // Guard against accidentally passing placeholders like <url> or trailing symbols.
+  return rawUrl
+    .trim()
+    .replace(/[<>]/g, "")
+    .replace(/\/+$/, "");
+}
+
+const BACKEND_URL = normalizeBaseUrl(process.env.REACT_APP_BACKEND_URL || "");
+export const API = BACKEND_URL ? `${BACKEND_URL}/api` : "/api";
 
 export const api = axios.create({
   baseURL: API,
   withCredentials: true,
   headers: { "Content-Type": "application/json" },
+});
+
+api.interceptors.request.use((config) => {
+  const token = getAuthToken();
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
 });
 
 export function formatApiError(err) {

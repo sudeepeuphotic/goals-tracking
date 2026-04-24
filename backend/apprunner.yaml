@@ -1,0 +1,35 @@
+version: 1.0
+runtime: python3
+build:
+  commands:
+    build:
+      - pip install -r requirements.txt
+run:
+  runtime-version: 3.11
+  command: uvicorn server:app --host 0.0.0.0 --port 8000
+  network:
+    port: 8000
+    env: PORT
+  env:
+    - name: MONGO_URL
+      value: "<set-in-apprunner>"
+    - name: DB_NAME
+      value: "goals_tracking"
+    - name: JWT_SECRET
+      value: "<set-in-apprunner>"
+    - name: FRONTEND_URL
+      value: "http://localhost:3000"
+    - name: CORS_ORIGINS
+      value: "http://localhost:3000"
+    - name: COGNITO_ENABLED
+      value: "true"
+    - name: COGNITO_REGION
+      value: "ap-south-1"
+    - name: COGNITO_CLIENT_ID
+      value: "5ok4khhs8a1rrm833l9uhv7d9e"
+    - name: COGNITO_USER_POOL_ID
+      value: "ap-south-1_3ea53r0My"
+    - name: COGNITO_ROLE_ATTRIBUTE
+      value: "custom:role"
+    - name: COGNITO_GROUP_ROLE_MAP
+      value: "{\"admin\":\"admin\",\"manager\":\"manager\",\"dri\":\"dri\",\"contributor\":\"contributor\"}"

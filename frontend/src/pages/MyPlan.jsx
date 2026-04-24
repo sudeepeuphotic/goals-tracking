@@ -11,6 +11,8 @@ import {
 import { toast } from "sonner";
 import EmptyState from "@/components/EmptyState";
 import TasksSection from "@/components/TasksSection";
+import { isManagerOrAdmin } from "@/lib/roles";
+import { asArray } from "@/lib/safe";
 
 const FIELDS = [
   { key: "mission_context", label: "Mission context", textarea: true },
@@ -20,7 +22,7 @@ const FIELDS = [
 
 export default function MyPlan() {
   const { user } = useAuth();
-  const isManagerOrAdmin = user.role === "admin" || user.role === "manager";
+  const userIsManagerOrAdmin = isManagerOrAdmin(user);
 
   const [objectives, setObjectives] = useState([]);
   const [users, setUsers] = useState([]);
@@ -38,10 +40,10 @@ export default function MyPlan() {
       api.get("/users"),
       api.get("/users/manageable"),
     ]);
-    setObjectives(ob.data);
-    setPlans(pl.data);
-    setUsers(us.data);
-    setManageable(mg.data);
+    setObjectives(asArray(ob.data));
+    setPlans(asArray(pl.data));
+    setUsers(asArray(us.data));
+    setManageable(asArray(mg.data));
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
@@ -81,7 +83,7 @@ export default function MyPlan() {
         goals: (form.goals || []).filter(g => (g || "").trim()).slice(0, 3),
         objective_id: activeId,
       };
-      const url = (isManagerOrAdmin && actingAs !== user.id) ? `/plans?user_id=${actingAs}` : "/plans";
+      const url = (userIsManagerOrAdmin && actingAs !== user.id) ? `/plans?user_id=${actingAs}` : "/plans";
       await api.post(url, payload);
       toast.success("Plan saved");
       load();
@@ -89,7 +91,7 @@ export default function MyPlan() {
     finally { setSaving(false); }
   };
 
-  if (!objectives.length && !isManagerOrAdmin) return (
+  if (!objectives.length && !userIsManagerOrAdmin) return (
     <div className="p-8"><EmptyState title="No objectives assigned" hint="Ask your admin to add you as a DRI or contributor." /></div>
   );
 
@@ -102,7 +104,7 @@ export default function MyPlan() {
       <p className="text-[var(--ink-soft)] mt-2">&lt; 20 minutes. Crisp. Real.</p>
 
       <div className="mt-6 flex flex-wrap items-center gap-4">
-        {isManagerOrAdmin && (
+        {userIsManagerOrAdmin && (
           <div className="flex items-center gap-2">
             <div className="mono-label">ACTING AS</div>
             <Select value={actingAs} onValueChange={setActingAs}>
@@ -132,7 +134,7 @@ export default function MyPlan() {
         </div>
       </div>
 
-      {isManagerOrAdmin && selectedUser && actingAs !== user.id && (
+      {userIsManagerOrAdmin && selectedUser && actingAs !== user.id && (
         <div className="mt-4 brutal-border p-3 bg-[#FFD600] text-sm flex items-center gap-2">
           <span className="mono-label">EDITING ON BEHALF OF</span>
           <span className="font-semibold">{selectedUser.name}</span>
@@ -140,7 +142,7 @@ export default function MyPlan() {
         </div>
       )}
 
-      {!form && isManagerOrAdmin && !relevantObjectives.length && (
+      {!form && userIsManagerOrAdmin && !relevantObjectives.length && (
         <div className="mt-8"><EmptyState title={`${selectedUser?.name || "This user"} is not on any objective yet`}
           hint="Assign them as a DRI or contributor in Cycles & Objectives first." /></div>
       )}
@@ -208,7 +210,7 @@ export default function MyPlan() {
       {form && (
         <div className="mt-6 flex justify-end">
           <Button onClick={save} disabled={saving} className="rounded-none bg-black text-white" data-testid="plan-save">
-            {saving ? "Saving…" : (isManagerOrAdmin && actingAs !== user.id ? `Save plan for ${selectedUser?.name} →` : "Save plan →")}
+            {saving ? "Saving…" : (userIsManagerOrAdmin && actingAs !== user.id ? `Save plan for ${selectedUser?.name} →` : "Save plan →")}
           </Button>
         </div>
       )}

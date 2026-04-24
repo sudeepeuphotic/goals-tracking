@@ -13,11 +13,13 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { isAdmin } from "@/lib/roles";
+import { asArray } from "@/lib/safe";
 
 export default function Cycles() {
   const { user } = useAuth();
   const nav = useNavigate();
-  const isAdmin = user.role === "admin";
+  const userIsAdmin = isAdmin(user);
 
   const [cycles, setCycles] = useState([]);
   const [objectives, setObjectives] = useState([]);
@@ -34,10 +36,11 @@ export default function Cycles() {
 
   const load = async () => {
     const [cy, ob, us] = await Promise.all([api.get("/cycles"), api.get("/objectives"), api.get("/users")]);
-    setCycles(cy.data);
-    setObjectives(ob.data);
-    setUsers(us.data);
-    if (!selectedCycleId && cy.data.length) setSelectedCycleId(cy.data[0].id);
+    const cyclesData = asArray(cy.data);
+    setCycles(cyclesData);
+    setObjectives(asArray(ob.data));
+    setUsers(asArray(us.data));
+    if (!selectedCycleId && cyclesData.length) setSelectedCycleId(cyclesData[0].id);
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
@@ -77,7 +80,7 @@ export default function Cycles() {
           <div className="mono-label">CYCLES & OBJECTIVES</div>
           <h1 className="text-3xl md:text-4xl font-bold tracking-tight mt-2">Execution plan</h1>
         </div>
-        {isAdmin && (
+        {userIsAdmin && (
           <Dialog open={openCycle} onOpenChange={setOpenCycle}>
             <DialogTrigger asChild>
               <Button className="rounded-none bg-black text-white brutal-shadow-sm" data-testid="new-cycle-btn">+ New cycle</Button>
@@ -125,7 +128,7 @@ export default function Cycles() {
               <div className="mono-label">OBJECTIVES · {selectedCycle.name}</div>
               <div className="text-xl font-semibold">{cycleObjectives.length} objective{cycleObjectives.length !== 1 && "s"}</div>
             </div>
-            {isAdmin && (
+            {userIsAdmin && (
               <Dialog open={openObj} onOpenChange={setOpenObj}>
                 <DialogTrigger asChild>
                   <Button className="rounded-none bg-black text-white" data-testid="new-objective-btn">+ New objective</Button>

@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import EmptyState from "@/components/EmptyState";
+import { asArray } from "@/lib/safe";
 
 const DIMS = [
   ["clarity", "Clarity", "How clearly did the DRI communicate direction?"],
@@ -42,16 +43,18 @@ export default function DRIFeedbackPage() {
 
   const load = async () => {
     const [ob, us] = await Promise.all([api.get("/objectives"), api.get("/users")]);
+    const objectivesData = asArray(ob.data);
+    const usersData = asArray(us.data);
     // I can give feedback where I am contributor (not DRI)
-    const mine = ob.data.filter(o => (o.contributor_ids || []).includes(user.id) && o.dri_id !== user.id);
+    const mine = objectivesData.filter(o => (o.contributor_ids || []).includes(user.id) && o.dri_id !== user.id);
     setObjectives(mine);
-    setUsers(us.data);
+    setUsers(usersData);
     if (!activeId && mine.length) setActiveId(mine[0].id);
 
     const fbMap = {};
     for (const o of mine) {
       const r = await api.get("/feedback", { params: { objective_id: o.id } });
-      const mine_fb = r.data.find(f => f.user_id === user.id);
+      const mine_fb = asArray(r.data).find(f => f.user_id === user.id);
       if (mine_fb) fbMap[o.id] = mine_fb;
     }
     setFeedbackMap(fbMap);

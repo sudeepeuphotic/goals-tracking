@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import AIPanel from "@/components/AIPanel";
 import TeamOverview from "@/components/TeamOverview";
 import { Bell } from "lucide-react";
+import { isManagerOrAdmin } from "@/lib/roles";
 
 function currentWeekISO() {
   const d = new Date();
@@ -30,17 +31,25 @@ export default function Dashboard() {
 
   const load = async () => {
     setLoading(true);
-    const [cy, ob, up, pl] = await Promise.all([
-      api.get("/cycles"),
-      api.get("/objectives"),
-      api.get("/updates", { params: { user_id: user.id } }),
-      api.get("/plans", { params: { user_id: user.id } }),
-    ]);
-    setCycles(cy.data);
-    setObjectives(ob.data);
-    setUpdates(up.data);
-    setPlans(pl.data);
-    setLoading(false);
+    try {
+      const [cy, ob, up, pl] = await Promise.all([
+        api.get("/cycles"),
+        api.get("/objectives"),
+        api.get("/updates", { params: { user_id: user.id } }),
+        api.get("/plans", { params: { user_id: user.id } }),
+      ]);
+      setCycles(Array.isArray(cy.data) ? cy.data : []);
+      setObjectives(Array.isArray(ob.data) ? ob.data : []);
+      setUpdates(Array.isArray(up.data) ? up.data : []);
+      setPlans(Array.isArray(pl.data) ? pl.data : []);
+    } catch (_e) {
+      setCycles([]);
+      setObjectives([]);
+      setUpdates([]);
+      setPlans([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
@@ -62,7 +71,7 @@ export default function Dashboard() {
     myObjectives.filter(o => !updates.some(u => u.objective_id === o.id && u.week === thisWeek)),
     [myObjectives, updates, thisWeek]
   );
-  const canSeeAI = user.role === "admin" || user.role === "manager";
+  const canSeeAI = isManagerOrAdmin(user);
 
   if (loading) return <div className="p-10 mono-label">Loading…</div>;
 
@@ -84,7 +93,7 @@ export default function Dashboard() {
       </div>
 
       {!currentObjective ? (
-        (user.role === "admin" || user.role === "manager") && activeCycle ? (
+        isManagerOrAdmin(user) && activeCycle ? (
           <TeamOverview cycle={activeCycle} />
         ) : (
           <EmptyState title="No objectives yet" hint="Ask your admin to assign you as a DRI or contributor to an objective."

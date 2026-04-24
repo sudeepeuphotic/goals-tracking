@@ -1,0 +1,19 @@
+version: 1.0
+runtime: nodejs18
+build:
+  commands:
+    build:
+      - yarn install --frozen-lockfile || npm ci
+      - yarn build || npm run build
+run:
+  command: npx serve -s build -l 3000
+  network:
+    port: 3000
+    env: PORT
+  env:
+    - name: REACT_APP_BACKEND_URL
+      value: "https://orca-app-zm3fg.ondigitalocean.app/api/"
+    - name: REACT_APP_COGNITO_USER_POOL_ID
+      value: "ap-south-1_3ea53r0My"
+    - name: REACT_APP_COGNITO_CLIENT_ID
+      value: "5ok4khhs8a1rrm833l9uhv7d9e"

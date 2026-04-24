@@ -7,6 +7,8 @@ import WeeklyUpdateWidget from "@/components/WeeklyUpdateWidget";
 import AIPanel from "@/components/AIPanel";
 import ProgressChart from "@/components/ProgressChart";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { isManagerOrAdmin } from "@/lib/roles";
+import { asArray } from "@/lib/safe";
 
 export default function ObjectiveDetail() {
   const { id } = useParams();
@@ -27,11 +29,11 @@ export default function ObjectiveDetail() {
       api.get("/feedback", { params: { objective_id: id } }).catch(() => ({ data: [] })),
     ]);
     setObjective(o.data);
-    setUpdates(up.data);
-    setUsers(us.data);
-    setPlans(pl.data);
-    setFeedback(fb.data);
-    if (user.role === "admin" || user.role === "manager") {
+    setUpdates(asArray(up.data));
+    setUsers(asArray(us.data));
+    setPlans(asArray(pl.data));
+    setFeedback(asArray(fb.data));
+    if (isManagerOrAdmin(user)) {
       const s = await api.get("/feedback/summary", { params: { objective_id: id } });
       setSummary(s.data);
     }
@@ -76,7 +78,7 @@ export default function ObjectiveDetail() {
           <TabsTrigger value="updates" className="rounded-none data-[state=active]:bg-black data-[state=active]:text-white px-4 py-2" data-testid="tab-updates">Updates</TabsTrigger>
           <TabsTrigger value="plans" className="rounded-none data-[state=active]:bg-black data-[state=active]:text-white px-4 py-2" data-testid="tab-plans">Plans</TabsTrigger>
           <TabsTrigger value="feedback" className="rounded-none data-[state=active]:bg-black data-[state=active]:text-white px-4 py-2" data-testid="tab-feedback">DRI feedback</TabsTrigger>
-          {(user.role === "admin" || user.role === "manager") && (
+          {isManagerOrAdmin(user) && (
             <TabsTrigger value="ai" className="rounded-none data-[state=active]:bg-black data-[state=active]:text-white px-4 py-2" data-testid="tab-ai">AI analysis</TabsTrigger>
           )}
         </TabsList>
@@ -130,7 +132,7 @@ export default function ObjectiveDetail() {
         </TabsContent>
 
         <TabsContent value="feedback" className="mt-6">
-          {(user.role !== "admin" && user.role !== "manager") && (
+          {!isManagerOrAdmin(user) && (
             <div className="text-sm text-[var(--ink-soft)] mb-4">
               Raw feedback is manager-only. Submit yours via the DRI Feedback page.
             </div>
@@ -151,7 +153,7 @@ export default function ObjectiveDetail() {
               </div>
             </div>
           )}
-          {(user.role === "admin" || user.role === "manager") && feedback.length > 0 && (
+          {isManagerOrAdmin(user) && feedback.length > 0 && (
             <div className="space-y-3">
               {feedback.map(f => (
                 <div key={f.id} className="brutal-card p-4">
@@ -176,7 +178,7 @@ export default function ObjectiveDetail() {
           )}
         </TabsContent>
 
-        {(user.role === "admin" || user.role === "manager") && (
+        {isManagerOrAdmin(user) && (
           <TabsContent value="ai" className="mt-6">
             <AIPanel kind="objective" objectiveId={id} canRun={true} title="AI_ANALYSIS · DRI & OBJECTIVE" />
           </TabsContent>
