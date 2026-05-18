@@ -12,8 +12,8 @@ import { toast } from "sonner";
 export default function Login() {
   const { user, login, forgotPassword, isCognitoConfigured } = useAuth();
   const nav = useNavigate();
-  const [email, setEmail] = useState("admin@noshrobotics.co");
-  const [password, setPassword] = useState("admin123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [fpOpen, setFpOpen] = useState(false);
   const [fpEmail, setFpEmail] = useState("");

@@ -291,7 +291,7 @@ def require_role(*roles):
 # ============ HIERARCHY ============
 async def can_manage(current: dict, target_id: str) -> bool:
     """Admin can manage anyone. Self always. Otherwise walk the target's manager chain."""
-    if current.get("role") == "admin":
+    if current.get("role") in ("admin", "manager"):
         return True
     if current["id"] == target_id:
         return True
@@ -311,7 +311,7 @@ async def can_manage(current: dict, target_id: str) -> bool:
 async def manageable_ids(current: dict) -> set:
     """All user ids the current user can act on."""
     all_users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(1000)
-    if current.get("role") == "admin":
+    if current.get("role") in ("admin", "manager"):
         return {u["id"] for u in all_users}
     result = {current["id"]}
     # BFS downward from current using manager_id edges
@@ -706,7 +706,7 @@ async def list_cycles(_: dict = Depends(get_current_user)):
 
 
 @api.post("/cycles")
-async def create_cycle(payload: FocusCycleCreate, _: dict = Depends(require_role("admin"))):
+async def create_cycle(payload: FocusCycleCreate, _: dict = Depends(require_role("admin", "manager"))):
     doc = {
         "id": str(uuid.uuid4()),
         "name": payload.name,
@@ -722,7 +722,7 @@ async def create_cycle(payload: FocusCycleCreate, _: dict = Depends(require_role
 
 @api.patch("/cycles/{cycle_id}")
 @api.put("/cycles/{cycle_id}")
-async def update_cycle(cycle_id: str, payload: FocusCycleUpdate, _: dict = Depends(require_role("admin"))):
+async def update_cycle(cycle_id: str, payload: FocusCycleUpdate, _: dict = Depends(require_role("admin", "manager"))):
     await db.cycles.update_one({"id": cycle_id}, {"$set": {"status": payload.status}})
     c = await db.cycles.find_one({"id": cycle_id}, {"_id": 0})
     if not c:
@@ -749,7 +749,7 @@ async def get_objective(objective_id: str, _: dict = Depends(get_current_user)):
 
 
 @api.post("/objectives")
-async def create_objective(payload: ObjectiveCreate, _: dict = Depends(require_role("admin"))):
+async def create_objective(payload: ObjectiveCreate, _: dict = Depends(require_role("admin", "manager"))):
     doc = payload.model_dump()
     doc["id"] = str(uuid.uuid4())
     doc["created_at"] = now_utc()

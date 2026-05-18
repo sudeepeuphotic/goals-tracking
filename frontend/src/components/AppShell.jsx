@@ -68,7 +68,7 @@ export default function AppShell() {
           <div className="mono-label px-3 pt-5 pb-2">TEAM</div>
           <NavItem to="/cycles" icon={Sparkles} label="Cycles & Objectives" testId="nav-cycles" />
           {userIsManager && <NavItem to="/manager" icon={FileText} label="Manager Review" testId="nav-manager" />}
-          {userIsAdmin && <NavItem to="/admin/users" icon={Users} label="Users" testId="nav-users" />}
+          {userIsManager && <NavItem to="/admin/users" icon={Users} label="Team & Reporting" testId="nav-users" />}
         </nav>
 
         <div className="p-3 brutal-border border-b-0 border-l-0 border-r-0">

@@ -3,6 +3,7 @@ import { api, formatApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useAuth } from "@/context/AuthContext";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
@@ -10,10 +11,12 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { ROLE } from "@/lib/roles";
+import { ROLE, isAdmin } from "@/lib/roles";
 import { asArray } from "@/lib/safe";
 
 export default function AdminUsers() {
+  const { user } = useAuth();
+  const canEditHierarchy = isAdmin(user);
   const fallbackRoles = [ROLE.ADMIN, ROLE.MANAGER, ROLE.DRI, ROLE.CONTRIBUTOR];
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState(fallbackRoles);
@@ -67,35 +70,39 @@ export default function AdminUsers() {
     <div className="p-6 md:p-8 max-w-[1200px] mx-auto">
       <div className="flex items-end justify-between mb-6">
         <div>
-          <div className="mono-label">ADMIN · USERS & HIERARCHY</div>
+          <div className="mono-label">{canEditHierarchy ? "ADMIN · USERS & HIERARCHY" : "TEAM · REPORTING STRUCTURE"}</div>
           <h1 className="text-3xl md:text-4xl font-bold tracking-tight mt-1">Team</h1>
           <p className="text-[var(--ink-soft)] mt-2 text-sm">
-            Assign a manager to each user. Managers can edit plans, submit weekly updates, and create tasks for anyone in their downline.
+            {canEditHierarchy
+              ? "Assign a manager to each user. Managers can edit plans, submit weekly updates, and create tasks for anyone in their downline."
+              : "View your organization chart and reporting lines. Role and manager edits are restricted to admins."}
           </p>
         </div>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild>
-            <Button className="rounded-none bg-black text-white brutal-shadow-sm" data-testid="new-user-btn">+ New user</Button>
-          </DialogTrigger>
-          <DialogContent className="rounded-none border border-black">
-            <DialogHeader><DialogTitle>New User</DialogTitle></DialogHeader>
-            <div className="space-y-3">
-              <div><Label>Name</Label><Input className="rounded-none border-black mt-1" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} data-testid="u-name" /></div>
-              <div><Label>Email</Label><Input className="rounded-none border-black mt-1" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} data-testid="u-email" /></div>
-              <div><Label>Password</Label><Input className="rounded-none border-black mt-1" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} data-testid="u-password" /></div>
-              <div>
-                <Label>Role</Label>
-                <Select value={form.role} onValueChange={v => setForm({ ...form, role: v })}>
-                  <SelectTrigger className="rounded-none border-black mt-1" data-testid="u-role"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {roles.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+        {canEditHierarchy && (
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger asChild>
+              <Button className="rounded-none bg-black text-white brutal-shadow-sm" data-testid="new-user-btn">+ New user</Button>
+            </DialogTrigger>
+            <DialogContent className="rounded-none border border-black">
+              <DialogHeader><DialogTitle>New User</DialogTitle></DialogHeader>
+              <div className="space-y-3">
+                <div><Label>Name</Label><Input className="rounded-none border-black mt-1" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} data-testid="u-name" /></div>
+                <div><Label>Email</Label><Input className="rounded-none border-black mt-1" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} data-testid="u-email" /></div>
+                <div><Label>Password</Label><Input className="rounded-none border-black mt-1" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} data-testid="u-password" /></div>
+                <div>
+                  <Label>Role</Label>
+                  <Select value={form.role} onValueChange={v => setForm({ ...form, role: v })}>
+                    <SelectTrigger className="rounded-none border-black mt-1" data-testid="u-role"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {roles.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
-            </div>
-            <DialogFooter><Button className="rounded-none bg-black text-white" onClick={create} data-testid="u-save">Create</Button></DialogFooter>
-          </DialogContent>
-        </Dialog>
+              <DialogFooter><Button className="rounded-none bg-black text-white" onClick={create} data-testid="u-save">Create</Button></DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
 
       <div className="brutal-border border-b-0 border-r-0">
@@ -113,23 +120,31 @@ export default function AdminUsers() {
             </div>
             <div className="text-sm font-mono text-[var(--ink-soft)] truncate">{u.email}</div>
             <div>
-              <Select value={u.role} onValueChange={v => updateRole(u.id, v)}>
-                <SelectTrigger className="rounded-none border-black h-8 text-xs" data-testid={`role-${u.id}`}><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {roles.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              {canEditHierarchy ? (
+                <Select value={u.role} onValueChange={v => updateRole(u.id, v)}>
+                  <SelectTrigger className="rounded-none border-black h-8 text-xs" data-testid={`role-${u.id}`}><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {roles.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <div className="text-xs font-mono px-2 py-1 border border-black w-fit">{u.role}</div>
+              )}
             </div>
             <div>
-              <Select value={u.manager_id || "__none__"} onValueChange={v => updateManager(u.id, v)}>
-                <SelectTrigger className="rounded-none border-black h-8 text-xs" data-testid={`manager-${u.id}`}><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">— no manager —</SelectItem>
-                  {users.filter(other => other.id !== u.id).map(other =>
-                    <SelectItem key={other.id} value={other.id}>{other.name} · {other.role}</SelectItem>
-                  )}
-                </SelectContent>
-              </Select>
+              {canEditHierarchy ? (
+                <Select value={u.manager_id || "__none__"} onValueChange={v => updateManager(u.id, v)}>
+                  <SelectTrigger className="rounded-none border-black h-8 text-xs" data-testid={`manager-${u.id}`}><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">— no manager —</SelectItem>
+                    {users.filter(other => other.id !== u.id).map(other =>
+                      <SelectItem key={other.id} value={other.id}>{other.name} · {other.role}</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <div className="text-xs font-mono px-2 py-1 border border-black w-fit">{nameFor(u.manager_id)}</div>
+              )}
             </div>
           </div>
         ))}

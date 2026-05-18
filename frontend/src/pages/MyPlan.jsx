@@ -48,12 +48,15 @@ export default function MyPlan() {
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
-  // objectives available to the selected actingAs user
+  // managers/admin can act on any user; others only on assigned objective participants
   const relevantObjectives = useMemo(() => {
+    if (userIsManagerOrAdmin) {
+      return objectives;
+    }
     return objectives.filter(o =>
       o.dri_id === actingAs || (o.contributor_ids || []).includes(actingAs)
     );
-  }, [objectives, actingAs]);
+  }, [objectives, actingAs, userIsManagerOrAdmin]);
 
   // when actingAs changes, pick their first objective
   useEffect(() => {

@@ -13,13 +13,13 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { isAdmin } from "@/lib/roles";
+import { isManagerOrAdmin } from "@/lib/roles";
 import { asArray } from "@/lib/safe";
 
 export default function Cycles() {
   const { user } = useAuth();
   const nav = useNavigate();
-  const userIsAdmin = isAdmin(user);
+  const userIsManagerOrAdmin = isManagerOrAdmin(user);
 
   const [cycles, setCycles] = useState([]);
   const [objectives, setObjectives] = useState([]);
@@ -80,7 +80,7 @@ export default function Cycles() {
           <div className="mono-label">CYCLES & OBJECTIVES</div>
           <h1 className="text-3xl md:text-4xl font-bold tracking-tight mt-2">Execution plan</h1>
         </div>
-        {userIsAdmin && (
+        {userIsManagerOrAdmin && (
           <Dialog open={openCycle} onOpenChange={setOpenCycle}>
             <DialogTrigger asChild>
               <Button className="rounded-none bg-black text-white brutal-shadow-sm" data-testid="new-cycle-btn">+ New cycle</Button>
@@ -128,7 +128,7 @@ export default function Cycles() {
               <div className="mono-label">OBJECTIVES · {selectedCycle.name}</div>
               <div className="text-xl font-semibold">{cycleObjectives.length} objective{cycleObjectives.length !== 1 && "s"}</div>
             </div>
-            {userIsAdmin && (
+            {userIsManagerOrAdmin && (
               <Dialog open={openObj} onOpenChange={setOpenObj}>
                 <DialogTrigger asChild>
                   <Button className="rounded-none bg-black text-white" data-testid="new-objective-btn">+ New objective</Button>
