@@ -29,8 +29,9 @@ export default function Cycles() {
   const [cycleForm, setCycleForm] = useState({ name: "", start_date: "", end_date: "" });
   const [objForm, setObjForm] = useState({
     title: "", description: "", dri_id: "", success_metric: "",
-    current_value: "", target_value: "", contributor_ids: [], rigor_questions: [""]
+    current_value: "", target_value: "", contributor_ids: [],
   });
+  const [reportees, setReportees] = useState([]);
   const [openCycle, setOpenCycle] = useState(false);
   const [openObj, setOpenObj] = useState(false);
 
@@ -43,6 +44,16 @@ export default function Cycles() {
     if (!selectedCycleId && cyclesData.length) setSelectedCycleId(cyclesData[0].id);
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  useEffect(() => {
+    if (!objForm.dri_id) {
+      setReportees([]);
+      return;
+    }
+    api.get("/users/reportees", { params: { manager_id: objForm.dri_id } })
+      .then(r => setReportees(asArray(r.data)))
+      .catch(() => setReportees([]));
+  }, [objForm.dri_id]);
 
   const createCycle = async () => {
     try {
@@ -59,12 +70,11 @@ export default function Cycles() {
       await api.post("/objectives", {
         ...objForm,
         cycle_id: selectedCycleId,
-        rigor_questions: objForm.rigor_questions.filter(q => q.trim()),
       });
       toast.success("Objective created");
       setOpenObj(false);
       setObjForm({ title: "", description: "", dri_id: "", success_metric: "",
-        current_value: "", target_value: "", contributor_ids: [], rigor_questions: [""] });
+        current_value: "", target_value: "", contributor_ids: [] });
       load();
     } catch (e) { toast.error(formatApiError(e)); }
   };
@@ -144,7 +154,9 @@ export default function Cycles() {
                         onChange={e => setObjForm({ ...objForm, description: e.target.value })} data-testid="obj-desc" /></div>
                     <div>
                       <Label>DRI</Label>
-                      <Select value={objForm.dri_id} onValueChange={v => setObjForm({ ...objForm, dri_id: v })}>
+                      <Select value={objForm.dri_id} onValueChange={v => setObjForm({
+                        ...objForm, dri_id: v, contributor_ids: [],
+                      })}>
                         <SelectTrigger className="rounded-none border-black mt-1" data-testid="obj-dri"><SelectValue placeholder="Select a DRI" /></SelectTrigger>
                         <SelectContent className="rounded-none">
                           {users.map(u => <SelectItem key={u.id} value={u.id}>{u.name} · {u.role}</SelectItem>)}
@@ -165,9 +177,15 @@ export default function Cycles() {
                           onChange={e => setObjForm({ ...objForm, target_value: e.target.value })} /></div>
                     </div>
                     <div>
-                      <Label>Contributors</Label>
+                      <Label>Contributors (DRI reportees)</Label>
                       <div className="mt-1 max-h-40 overflow-y-auto brutal-border p-2 space-y-1">
-                        {users.filter(u => u.id !== objForm.dri_id).map(u => {
+                        {!objForm.dri_id && (
+                          <p className="text-xs text-[var(--ink-soft)]">Select a DRI first.</p>
+                        )}
+                        {objForm.dri_id && !reportees.length && (
+                          <p className="text-xs text-[var(--ink-soft)]">No reportees for this DRI. Set reporting structure in Team &amp; Reporting.</p>
+                        )}
+                        {reportees.map(u => {
                           const checked = objForm.contributor_ids.includes(u.id);
                           return (
                             <label key={u.id} className="flex items-center gap-2 text-sm">
@@ -184,21 +202,6 @@ export default function Cycles() {
                           );
                         })}
                       </div>
-                    </div>
-                    <div>
-                      <Label>Rigor questions</Label>
-                      {objForm.rigor_questions.map((q, i) => (
-                        <Input key={i} value={q} placeholder={`Question ${i + 1}`}
-                          className="rounded-none border-black mt-1"
-                          onChange={e => {
-                            const next = [...objForm.rigor_questions]; next[i] = e.target.value;
-                            setObjForm({ ...objForm, rigor_questions: next });
-                          }} />
-                      ))}
-                      <Button variant="ghost" size="sm" className="rounded-none mt-1"
-                        onClick={() => setObjForm({ ...objForm, rigor_questions: [...objForm.rigor_questions, ""] })}>
-                        + Add question
-                      </Button>
                     </div>
                   </div>
                   <DialogFooter><Button className="rounded-none bg-black text-white" onClick={createObjective} data-testid="save-objective">Create</Button></DialogFooter>

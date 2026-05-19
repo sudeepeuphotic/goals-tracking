@@ -179,8 +179,19 @@ export default function MyPlan() {
             </div>
           </div>
 
+          {(form.assigned_goals || []).length > 0 && (
+            <div className="p-5 brutal-border border-t-0 border-l-0 border-r-0 bg-[var(--surface-hover)]">
+              <Label className="mono-label">Assigned goals (set by manager / DRI)</Label>
+              <ol className="text-sm mt-2 list-decimal list-inside">
+                {(form.assigned_goals || []).map((g, i) => (
+                  <li key={i}>{typeof g === "string" ? g : g.text}</li>
+                ))}
+              </ol>
+            </div>
+          )}
+
           <div className="p-5 brutal-border border-t-0 border-l-0 border-r-0 bg-white">
-            <Label className="mono-label">Goals (max 3)</Label>
+            <Label className="mono-label">Your goals (max 3)</Label>
             <div className="space-y-2 mt-2">
               {(form.goals || ["", "", ""]).slice(0, 3).map((g, i) => (
                 <div key={i} className="flex items-center gap-3">

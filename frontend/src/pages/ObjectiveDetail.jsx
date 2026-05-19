@@ -6,6 +6,7 @@ import StatusLight from "@/components/StatusLight";
 import WeeklyUpdateWidget from "@/components/WeeklyUpdateWidget";
 import AIPanel from "@/components/AIPanel";
 import ProgressChart from "@/components/ProgressChart";
+import ObjectiveMemberPanel from "@/components/ObjectiveMemberPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { isManagerOrAdmin } from "@/lib/roles";
 import { asArray } from "@/lib/safe";
@@ -115,6 +116,12 @@ export default function ObjectiveDetail() {
         </TabsContent>
 
         <TabsContent value="plans" className="mt-6">
+          <ObjectiveMemberPanel
+            objective={objective}
+            users={users}
+            plans={plans}
+            onSaved={load}
+          />
           <div className="grid md:grid-cols-2 gap-0 brutal-border border-b-0 border-r-0">
             {plans.length === 0 && <div className="p-6 text-sm text-[var(--ink-soft)]">No plans submitted yet.</div>}
             {plans.map(p => (
@@ -123,9 +130,29 @@ export default function ObjectiveDetail() {
                 <div className="text-sm mt-2"><b>Mission:</b> {p.mission_context || "—"}</div>
                 <div className="text-sm mt-1"><b>Role:</b> {p.role_in_objective || "—"}</div>
                 <div className="text-sm mt-1"><b>Ownership metric:</b> {p.ownership_metric || "—"} ({p.metric_current} → {p.metric_target})</div>
-                {p.goals?.length ? <ol className="text-sm mt-2 list-decimal list-inside">
-                  {p.goals.map((g, i) => <li key={i}>{g}</li>)}
-                </ol> : null}
+                {(p.assigned_goals || []).length > 0 && (
+                  <div className="mt-2">
+                    <div className="mono-label text-xs">Assigned goals</div>
+                    <ol className="text-sm mt-1 list-decimal list-inside">
+                      {(p.assigned_goals || []).map((g, i) => (
+                        <li key={i}>{typeof g === "string" ? g : g.text}</li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+                {p.goals?.length ? (
+                  <div className="mt-2">
+                    <div className="mono-label text-xs">Personal goals</div>
+                    <ol className="text-sm mt-1 list-decimal list-inside">
+                      {p.goals.map((g, i) => <li key={i}>{g}</li>)}
+                    </ol>
+                  </div>
+                ) : null}
+                {(p.rigor_questions || []).length > 0 && (
+                  <div className="mt-2 text-xs font-mono text-[var(--ink-soft)]">
+                    Rigor: {(p.rigor_questions || []).join(" · ")}
+                  </div>
+                )}
               </div>
             ))}
           </div>

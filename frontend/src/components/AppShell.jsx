@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { isAdmin, isManagerOrAdmin } from "@/lib/roles";
 import {
-  LayoutDashboard, Target, FileText, MessageSquare, Sparkles,
+  LayoutDashboard, FileText, MessageSquare, Sparkles,
   Users, LogOut, BookOpen, Gauge, Inbox
 } from "lucide-react";
 
@@ -59,7 +59,6 @@ export default function AppShell() {
         <nav className="p-3 space-y-1 flex-1">
           <div className="mono-label px-3 pb-2 pt-1">MY WORK</div>
           <NavItem to="/" icon={LayoutDashboard} label="Dashboard" testId="nav-dashboard" />
-          <NavItem to="/my-plan" icon={Target} label="My Plan" testId="nav-my-plan" />
           <NavItem to="/weekly" icon={Gauge} label="Weekly Update" testId="nav-weekly" />
           <NavItem to="/reflection" icon={BookOpen} label="Reflection" testId="nav-reflection" />
           <NavItem to="/feedback" icon={MessageSquare} label="DRI Feedback" testId="nav-feedback" />

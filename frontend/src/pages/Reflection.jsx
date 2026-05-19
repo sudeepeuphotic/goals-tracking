@@ -47,30 +47,36 @@ export default function Reflection() {
   const [activeId, setActiveId] = useState("");
   const [individual, setIndividual] = useState(null);
   const [driRef, setDriRef] = useState(null);
+  const [myPlan, setMyPlan] = useState(null);
   const [mode, setMode] = useState(REFLECTION_MODE.INDIVIDUAL);
 
   const load = async () => {
-    const [ob, ir, dr] = await Promise.all([
+    const [ob, ir, dr, pl] = await Promise.all([
       api.get("/objectives"),
       api.get("/reflections/individual").catch(()=>({data:[]})),
       api.get("/reflections/dri").catch(()=>({data:[]})),
+      api.get("/plans").catch(() => ({ data: [] })),
     ]);
     const objectivesData = asArray(ob.data);
     const indData = asArray(ir.data);
     const driData = asArray(dr.data);
+    const plansData = asArray(pl.data);
     const mine = objectivesData.filter(o => o.dri_id === user.id || (o.contributor_ids || []).includes(user.id));
     setObjectives(mine);
     if (!activeId && mine.length) setActiveId(mine[0].id);
 
     const active = mine.find(o => o.id === (activeId || mine[0]?.id));
     if (!active) return;
+    const plan = plansData.find(p => p.objective_id === active.id && p.user_id === user.id);
+    setMyPlan(plan || null);
+    const rigorQs = plan?.rigor_questions || [];
     const ind = indData.find(r => r.objective_id === active.id && r.user_id === user.id);
     setIndividual(ind || {
       objective_id: active.id,
       goal_outcomes: "", contribution_to_objective: "", what_moved_metric: "",
       wins: "", failures: "", learnings: "", support_needed: "",
       bottlenecks: "", trajectory_change: "", ceo_question_response: "",
-      rigor_answers: Object.fromEntries((active.rigor_questions || []).map(q => [q, ""])),
+      rigor_answers: Object.fromEntries(rigorQs.map(q => [q, ""])),
     });
     if (active.dri_id === user.id) {
       const d = driData.find(r => r.objective_id === active.id);
@@ -136,11 +142,11 @@ export default function Reflection() {
                 onChange={e => setIndividual({ ...individual, [k]: e.target.value })} data-testid={`refl-${k}`} />
             </div>
           ))}
-          {active && (active.rigor_questions || []).length > 0 && (
+          {myPlan && (myPlan.rigor_questions || []).length > 0 && (
             <div className="p-5 brutal-border border-t-0 border-l-0 border-r-0 bg-white">
-              <Label className="mono-label">Rigor questions</Label>
+              <Label className="mono-label">Rigor questions (from your DRI)</Label>
               <div className="mt-2 space-y-3">
-                {active.rigor_questions.map((q, i) => (
+                {myPlan.rigor_questions.map((q, i) => (
                   <div key={i}>
                     <div className="text-sm font-medium">{q}</div>
                     <Input className="rounded-none border-black mt-1"

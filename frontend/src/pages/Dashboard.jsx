@@ -7,7 +7,8 @@ import WeeklyUpdateWidget from "@/components/WeeklyUpdateWidget";
 import EmptyState from "@/components/EmptyState";
 import { Button } from "@/components/ui/button";
 import AIPanel from "@/components/AIPanel";
-import TeamOverview from "@/components/TeamOverview";
+import GoalsProgressOverview from "@/components/GoalsProgressOverview";
+import GoalProgressBar from "@/components/GoalProgressBar";
 import { Bell } from "lucide-react";
 import { isManagerOrAdmin } from "@/lib/roles";
 
@@ -62,6 +63,11 @@ export default function Dashboard() {
     ));
   }, [objectives, activeCycle, user]);
 
+  const driObjectives = useMemo(() => {
+    if (!activeCycle) return [];
+    return objectives.filter(o => o.cycle_id === activeCycle.id && o.dri_id === user.id);
+  }, [objectives, activeCycle, user.id]);
+
   const currentObjective = myObjectives[0];
   const myPlan = useMemo(() => plans.find(p => p.objective_id === currentObjective?.id), [plans, currentObjective]);
   const latestUpdate = useMemo(() => updates.find(u => u.objective_id === currentObjective?.id), [updates, currentObjective]);
@@ -72,6 +78,8 @@ export default function Dashboard() {
     [myObjectives, updates, thisWeek]
   );
   const canSeeAI = isManagerOrAdmin(user);
+  const showTeamProgress = isManagerOrAdmin(user) && activeCycle;
+  const showDriProgress = driObjectives.length > 0 && activeCycle && !isManagerOrAdmin(user);
 
   if (loading) return <div className="p-10 mono-label">Loading…</div>;
 
@@ -92,13 +100,14 @@ export default function Dashboard() {
         )}
       </div>
 
+      {showTeamProgress && <GoalsProgressOverview cycle={activeCycle} user={user} />}
+      {showDriProgress && <GoalsProgressOverview cycle={activeCycle} user={user} />}
+
       {!currentObjective ? (
-        isManagerOrAdmin(user) && activeCycle ? (
-          <TeamOverview cycle={activeCycle} />
-        ) : (
+        !showTeamProgress && !showDriProgress ? (
           <EmptyState title="No objectives yet" hint="Ask your admin to assign you as a DRI or contributor to an objective."
             action={<Button onClick={() => nav("/cycles")} className="rounded-none bg-black text-white" data-testid="go-cycles-btn">Go to cycles →</Button>} />
-        )
+        ) : null
       ) : (
         <>
           {overdueObjectives.length > 0 && (
@@ -117,78 +126,77 @@ export default function Dashboard() {
           )}
 
           <div className="grid lg:grid-cols-3 gap-6" data-testid="dashboard-grid">
-          {/* Left: objective + plan */}
-          <div className="lg:col-span-2 space-y-6">
-            <div className="brutal-card p-5">
-              <div className="flex items-center justify-between">
-                <div className="mono-label">CURRENT OBJECTIVE</div>
-                <Button variant="ghost" size="sm" onClick={() => nav(`/objectives/${currentObjective.id}`)}
-                  className="rounded-none h-8 text-xs" data-testid="view-objective-btn">VIEW →</Button>
-              </div>
-              <h2 className="text-2xl font-semibold mt-1">{currentObjective.title}</h2>
-              <p className="text-sm text-[var(--ink-soft)] mt-2">{currentObjective.description}</p>
+            <div className="lg:col-span-2 space-y-6">
+              <div className="brutal-card p-5">
+                <div className="flex items-center justify-between">
+                  <div className="mono-label">CURRENT OBJECTIVE</div>
+                  <Button variant="ghost" size="sm" onClick={() => nav(`/objectives/${currentObjective.id}`)}
+                    className="rounded-none h-8 text-xs" data-testid="view-objective-btn">VIEW →</Button>
+                </div>
+                <h2 className="text-2xl font-semibold mt-1">{currentObjective.title}</h2>
+                <p className="text-sm text-[var(--ink-soft)] mt-2">{currentObjective.description}</p>
 
-              <div className="grid grid-cols-3 gap-0 mt-4 brutal-border border-b-0 border-r-0">
-                <div className="p-3 brutal-border border-t-0 border-l-0">
-                  <div className="mono-label">METRIC</div>
-                  <div className="text-sm font-medium mt-1">{currentObjective.success_metric || "—"}</div>
-                </div>
-                <div className="p-3 brutal-border border-t-0 border-l-0">
-                  <div className="mono-label">CURRENT</div>
-                  <div className="text-sm font-mono mt-1">{currentObjective.current_value || "—"}</div>
-                </div>
-                <div className="p-3 brutal-border border-t-0 border-l-0">
-                  <div className="mono-label">TARGET</div>
-                  <div className="text-sm font-mono mt-1">{currentObjective.target_value || "—"}</div>
-                </div>
-              </div>
-            </div>
-
-            <div className="brutal-card p-5">
-              <div className="flex items-center justify-between">
-                <div className="mono-label">MY GOALS · THIS CYCLE</div>
-                <Button variant="ghost" size="sm" onClick={() => nav("/my-plan")}
-                  className="rounded-none h-8 text-xs" data-testid="edit-plan-btn">EDIT →</Button>
-              </div>
-              {myPlan?.goals?.length ? (
-                <ol className="mt-3 space-y-2">
-                  {myPlan.goals.map((g, i) => (
-                    <li key={i} className="flex gap-3 text-sm">
-                      <span className="mono-label pt-0.5">0{i + 1}</span>
-                      <span>{g}</span>
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <p className="text-sm text-[var(--ink-soft)] mt-3">You haven't filled your plan yet.</p>
-              )}
-              {myPlan && (
-                <div className="grid grid-cols-2 gap-0 mt-5 brutal-border border-b-0 border-r-0">
+                <div className="grid grid-cols-3 gap-0 mt-4 brutal-border border-b-0 border-r-0">
                   <div className="p-3 brutal-border border-t-0 border-l-0">
-                    <div className="mono-label">OWNERSHIP METRIC</div>
-                    <div className="text-sm mt-1">{myPlan.ownership_metric || "—"}</div>
+                    <div className="mono-label">METRIC</div>
+                    <div className="text-sm font-medium mt-1">{currentObjective.success_metric || "—"}</div>
                   </div>
                   <div className="p-3 brutal-border border-t-0 border-l-0">
-                    <div className="mono-label">STATUS</div>
-                    <div className="flex items-center gap-2 mt-1">
-                      <StatusLight value={latestUpdate?.status} />
-                      <span className="text-sm">{latestUpdate ? latestUpdate.update_text : "No update yet"}</span>
+                    <div className="mono-label">CURRENT</div>
+                    <div className="text-sm font-mono mt-1">{currentObjective.current_value || "—"}</div>
+                  </div>
+                  <div className="p-3 brutal-border border-t-0 border-l-0">
+                    <div className="mono-label">TARGET</div>
+                    <div className="text-sm font-mono mt-1">{currentObjective.target_value || "—"}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="brutal-card p-5">
+                <div className="mono-label">YOUR PROGRESS</div>
+                {currentObjective.dri_id === user.id ? (
+                  <GoalProgressBar
+                    className="mt-3"
+                    label="Objective metric"
+                    metricName={currentObjective.success_metric}
+                    current={currentObjective.current_value}
+                    target={currentObjective.target_value}
+                  />
+                ) : (
+                  <GoalProgressBar
+                    className="mt-3"
+                    label="Your plan"
+                    metricName={myPlan?.ownership_metric}
+                    current={myPlan?.metric_current}
+                    target={myPlan?.metric_target}
+                  />
+                )}
+                {myPlan && (
+                  <div className="grid grid-cols-2 gap-0 mt-5 brutal-border border-b-0 border-r-0">
+                    <div className="p-3 brutal-border border-t-0 border-l-0">
+                      <div className="mono-label">OWNERSHIP METRIC</div>
+                      <div className="text-sm mt-1">{myPlan.ownership_metric || "—"}</div>
+                    </div>
+                    <div className="p-3 brutal-border border-t-0 border-l-0">
+                      <div className="mono-label">STATUS</div>
+                      <div className="flex items-center gap-2 mt-1">
+                        <StatusLight value={latestUpdate?.status} />
+                        <span className="text-sm">{latestUpdate ? latestUpdate.update_text : "No update yet"}</span>
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              <WeeklyUpdateWidget objective={currentObjective} onSubmitted={load} />
+              {canSeeAI && (
+                <AIPanel kind="individual" userId={user.id} objectiveId={currentObjective.id}
+                  canRun={true} title="AI_ANALYSIS · ME" />
               )}
             </div>
           </div>
-
-          {/* Right: weekly widget + AI panel */}
-          <div className="space-y-6">
-            <WeeklyUpdateWidget objective={currentObjective} onSubmitted={load} />
-            {canSeeAI && (
-              <AIPanel kind="individual" userId={user.id} objectiveId={currentObjective.id}
-                canRun={true} title="AI_ANALYSIS · ME" />
-            )}
-          </div>
-        </div>
         </>
       )}
     </div>

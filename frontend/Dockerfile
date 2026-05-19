@@ -9,7 +9,6 @@ ENV REACT_APP_COGNITO_USER_POOL_ID=$REACT_APP_COGNITO_USER_POOL_ID
 ENV REACT_APP_COGNITO_CLIENT_ID=$REACT_APP_COGNITO_CLIENT_ID
 COPY package.json yarn.lock* package-lock.json* ./
 RUN if [ -f yarn.lock ]; then yarn install --frozen-lockfile; else npm install --legacy-peer-deps; fi
-RUN if [ ! -f yarn.lock ]; then npm install --legacy-peer-deps ajv@^8 ajv-keywords@^5; fi
 
 COPY . .
 RUN if [ -f yarn.lock ]; then yarn build; else npm run build; fi
