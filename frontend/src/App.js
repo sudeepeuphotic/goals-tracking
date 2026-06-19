@@ -7,7 +7,6 @@ import AppShell from "@/components/AppShell";
 import Dashboard from "@/pages/Dashboard";
 import Cycles from "@/pages/Cycles";
 import ObjectiveDetail from "@/pages/ObjectiveDetail";
-import MyPlan from "@/pages/MyPlan";
 import WeeklyUpdatePage from "@/pages/WeeklyUpdatePage";
 import Reflection from "@/pages/Reflection";
 import DRIFeedbackPage from "@/pages/DRIFeedbackPage";
@@ -41,7 +40,6 @@ function AppRoutes() {
         <Route index element={<Dashboard />} />
         <Route path="cycles" element={<Cycles />} />
         <Route path="objectives/:id" element={<ObjectiveDetail />} />
-        <Route path="my-plan" element={<MyPlan />} />
         <Route path="weekly" element={<WeeklyUpdatePage />} />
         <Route path="reflection" element={<Reflection />} />
         <Route path="feedback" element={<DRIFeedbackPage />} />

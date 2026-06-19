@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import StatusLight from "@/components/StatusLight";
@@ -7,12 +7,17 @@ import WeeklyUpdateWidget from "@/components/WeeklyUpdateWidget";
 import AIPanel from "@/components/AIPanel";
 import ProgressChart from "@/components/ProgressChart";
 import ObjectiveMemberPanel from "@/components/ObjectiveMemberPanel";
+import AssignedGoalsChecklist from "@/components/AssignedGoalsChecklist";
+import GoalProgressBar from "@/components/GoalProgressBar";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { isManagerOrAdmin } from "@/lib/roles";
 import { asArray } from "@/lib/safe";
 
 export default function ObjectiveDetail() {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
+  const nav = useNavigate();
   const { user } = useAuth();
   const [objective, setObjective] = useState(null);
   const [updates, setUpdates] = useState([]);
@@ -48,10 +53,25 @@ export default function ObjectiveDetail() {
   const dri = userMap[objective.dri_id];
   const isDRI = objective.dri_id === user.id;
   const isContributor = (objective.contributor_ids || []).includes(user.id);
+  const isChildObjective = Boolean(objective.parent_objective_id);
+  const defaultTab = searchParams.get("tab") || (isDRI && !isChildObjective ? "plans" : "updates");
+  const myPlan = plans.find(p => p.user_id === user.id);
+  const rollup = objective.rollup;
+  const childObjectives = objective.child_objectives || [];
 
   return (
     <div className="p-6 md:p-8 max-w-[1400px] mx-auto">
-      <div className="mono-label">OBJECTIVE</div>
+      {objective.parent_objective && (
+        <button
+          type="button"
+          onClick={() => nav(`/objectives/${objective.parent_objective.id}`)}
+          className="mono-label text-sm mb-2 hover:underline"
+          data-testid="parent-objective-link"
+        >
+          ← Parent · {objective.parent_objective.title}
+        </button>
+      )}
+      <div className="mono-label">{isChildObjective ? "TEAM SUB-OBJECTIVE" : "OBJECTIVE"}</div>
       <h1 className="text-3xl md:text-4xl font-bold tracking-tight mt-1">{objective.title}</h1>
       <p className="text-[var(--ink-soft)] mt-2 max-w-3xl">{objective.description}</p>
 
@@ -74,7 +94,46 @@ export default function ObjectiveDetail() {
         </div>
       </div>
 
-      <Tabs defaultValue="updates" className="mt-8">
+      {rollup && (
+        <div className="brutal-card p-5 mt-6" data-testid="parent-rollup">
+          <div className="mono-label">TEAM ROLLUP · FROM SUB-OBJECTIVES</div>
+          <GoalProgressBar
+            className="mt-3"
+            label="Rollup progress"
+            metricName="Goal completion across team"
+            current={String(rollup.percent)}
+            target="100"
+          />
+          <div className="mt-4 space-y-2">
+            {(rollup.children || []).map(child => (
+              <button
+                key={child.objective_id}
+                type="button"
+                onClick={() => nav(`/objectives/${child.objective_id}`)}
+                className="w-full text-left p-3 brutal-border hover:bg-[var(--surface-hover)]"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm font-medium">{child.title}</span>
+                  <span className="text-xs font-mono">{child.percent}%</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {isContributor && myPlan && (
+        <div className="brutal-card p-5 mt-6">
+          <AssignedGoalsChecklist
+            objectiveId={objective.id}
+            plan={myPlan}
+            canToggle
+            onUpdated={load}
+          />
+        </div>
+      )}
+
+      <Tabs key={`${id}-${defaultTab}`} defaultValue={defaultTab} className="mt-8">
         <TabsList className="rounded-none bg-transparent p-0 border-b-2 border-black w-full justify-start gap-0">
           <TabsTrigger value="updates" className="rounded-none data-[state=active]:bg-black data-[state=active]:text-white px-4 py-2" data-testid="tab-updates">Updates</TabsTrigger>
           <TabsTrigger value="plans" className="rounded-none data-[state=active]:bg-black data-[state=active]:text-white px-4 py-2" data-testid="tab-plans">Plans</TabsTrigger>
@@ -116,12 +175,51 @@ export default function ObjectiveDetail() {
         </TabsContent>
 
         <TabsContent value="plans" className="mt-6">
-          <ObjectiveMemberPanel
-            objective={objective}
-            users={users}
-            plans={plans}
-            onSaved={load}
-          />
+          {!isChildObjective && (
+            <ObjectiveMemberPanel
+              objective={objective}
+              users={users}
+              plans={plans}
+              onSaved={load}
+            />
+          )}
+          {isChildObjective && isDRI && (
+            <div className="brutal-card p-5 mb-6 text-sm text-[var(--ink-soft)]">
+              Contributor goals for this sub-objective are set below. Progress rolls up to the parent objective.
+            </div>
+          )}
+          {childObjectives.length > 0 && (
+            <div className="brutal-card p-5 mb-6">
+              <div className="mono-label">TEAM SUB-OBJECTIVES</div>
+              <div className="mt-3 space-y-2">
+                {childObjectives.map(child => {
+                  const contrib = userMap[child.contributor_ids?.[0]];
+                  return (
+                    <button
+                      key={child.id}
+                      type="button"
+                      onClick={() => nav(`/objectives/${child.id}`)}
+                      className="w-full text-left p-3 brutal-border hover:bg-[var(--surface-hover)]"
+                    >
+                      <div className="text-sm font-medium">{child.title}</div>
+                      <div className="text-xs font-mono text-[var(--ink-soft)] mt-1">
+                        Contributor · {contrib?.name || "—"}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              {isDRI && (
+                <Button
+                  className="rounded-none bg-black text-white mt-4"
+                  onClick={() => nav("/cycles")}
+                  data-testid="add-sub-objective"
+                >
+                  + New team sub-objective
+                </Button>
+              )}
+            </div>
+          )}
           <div className="grid md:grid-cols-2 gap-0 brutal-border border-b-0 border-r-0">
             {plans.length === 0 && <div className="p-6 text-sm text-[var(--ink-soft)]">No plans submitted yet.</div>}
             {plans.map(p => (

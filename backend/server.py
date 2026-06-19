@@ -16,13 +16,14 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Literal
 from botocore.exceptions import ClientError, NoCredentialsError
 
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Response, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
 
 from ai import build_ai_router
 from email_utils import send_email, password_reset_html
+from notifications import notify_objective_created, notify_objective_updated, notify_goals_assigned
 
 
 # ============ CONFIG ============
@@ -194,7 +195,11 @@ async def upsert_user_from_cognito(
     groups: List[str],
 ) -> dict:
     existing = await db.users.find_one({"email": email}, {"_id": 0, "password_hash": 0})
-    role = derive_role_from_cognito(attrs, groups) or (existing.get("role") if existing else None)
+    cognito_role = derive_role_from_cognito(attrs, groups)
+    if existing and existing.get("role"):
+        role = existing.get("role")
+    else:
+        role = cognito_role
     merged = merge_user_doc(existing, email=email, name=name, role=role)
     await db.users.update_one({"email": email}, {"$set": merged}, upsert=True)
     return clean_user(merged)
@@ -328,6 +333,269 @@ async def manageable_ids(current: dict) -> set:
     return result
 
 
+async def dri_reportee_ids(dri_id: str) -> set:
+    """Direct reportees of a DRI (users whose manager_id is the DRI)."""
+    reportees = await db.users.find({"manager_id": dri_id}, {"_id": 0, "id": 1}).to_list(500)
+    return {u["id"] for u in reportees}
+
+
+async def validate_contributors_for_dri(dri_id: str, contributor_ids: List[str]):
+    if not contributor_ids:
+        return
+    reportees = await dri_reportee_ids(dri_id)
+    invalid = [c for c in contributor_ids if c not in reportees]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail="All contributors must be direct reportees of the DRI",
+        )
+
+
+def plan_goal_completion_percent(plan: Optional[dict]) -> Optional[int]:
+    if not plan:
+        return None
+    goals = plan.get("assigned_goals") or []
+    if not goals:
+        return None
+    completed = sum(
+        1 for g in goals
+        if (isinstance(g, dict) and g.get("completed")) or False
+    )
+    return round(completed / len(goals) * 100)
+
+
+async def compute_parent_rollup(parent_id: str) -> Optional[dict]:
+    children = await db.objectives.find(
+        {"parent_objective_id": parent_id}, {"_id": 0}
+    ).to_list(100)
+    if not children:
+        return None
+    child_rows = []
+    for child in children:
+        contribs = child.get("contributor_ids") or []
+        if not contribs:
+            continue
+        uid = contribs[0]
+        plan = await db.plans.find_one(
+            {"objective_id": child["id"], "user_id": uid}, {"_id": 0}
+        )
+        pct = plan_goal_completion_percent(plan) if plan else 0
+        child_rows.append({
+            "objective_id": child["id"],
+            "title": child.get("title", ""),
+            "contributor_id": uid,
+            "percent": pct if pct is not None else 0,
+        })
+    if not child_rows:
+        return None
+    avg = round(sum(r["percent"] for r in child_rows) / len(child_rows))
+    return {"percent": avg, "children": child_rows}
+
+
+async def sync_parent_rollup(parent_id: str):
+    rollup = await compute_parent_rollup(parent_id)
+    if not rollup:
+        return
+    await db.objectives.update_one(
+        {"id": parent_id},
+        {"$set": {
+            "current_value": str(rollup["percent"]),
+            "target_value": "100",
+            "rollup_progress": rollup["percent"],
+            "rollup_updated_at": now_utc(),
+        }},
+    )
+
+
+async def validate_child_objective_create(payload: "ObjectiveCreate", user: dict):
+    if not payload.parent_objective_id:
+        return
+    parent = await get_objective_or_404(payload.parent_objective_id)
+    if parent.get("parent_objective_id"):
+        raise HTTPException(status_code=400, detail="Parent must be a top-level objective")
+    if len(payload.contributor_ids) != 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Team sub-objectives require exactly one contributor",
+        )
+    payload.dri_id = parent["dri_id"]
+    payload.cycle_id = parent["cycle_id"]
+
+
+async def enrich_objective(obj: dict) -> dict:
+    enriched = dict(obj)
+    children = await db.objectives.find(
+        {"parent_objective_id": obj["id"]}, {"_id": 0}
+    ).to_list(100)
+    enriched["child_objectives"] = children
+    if not obj.get("parent_objective_id"):
+        rollup = await compute_parent_rollup(obj["id"])
+        if rollup:
+            enriched["rollup"] = rollup
+            enriched["rollup_progress"] = rollup["percent"]
+    if obj.get("parent_objective_id"):
+        parent = await db.objectives.find_one(
+            {"id": obj["parent_objective_id"]},
+            {"_id": 0, "id": 1, "title": 1},
+        )
+        enriched["parent_objective"] = parent
+    return enriched
+
+
+def can_toggle_goal_completion(user: dict, obj: dict, member_user_id: str) -> bool:
+    if member_user_id not in objective_member_ids(obj):
+        return False
+    if user["role"] in ("admin", "manager"):
+        return True
+    if member_user_id == user["id"]:
+        return True
+    if is_objective_dri(user, obj):
+        return member_user_id in obj.get("contributor_ids", [])
+    return False
+
+
+async def can_toggle_goal_completion_async(user: dict, obj: dict, member_user_id: str) -> bool:
+    if member_user_id not in objective_member_ids(obj):
+        return False
+    if user["role"] in ("admin", "manager"):
+        return True
+    if member_user_id == user["id"]:
+        return True
+    if await user_is_dri_for_objective(user, obj):
+        return member_user_id in obj.get("contributor_ids", [])
+    return False
+
+
+async def get_objective_or_404(objective_id: str) -> dict:
+    obj = await db.objectives.find_one({"id": objective_id}, {"_id": 0})
+    if not obj:
+        raise HTTPException(status_code=404, detail="Objective not found")
+    return obj
+
+
+def is_objective_dri(user: dict, obj: dict) -> bool:
+    return obj.get("dri_id") == user.get("id")
+
+
+async def user_is_dri_for_objective(user: dict, obj: dict) -> bool:
+    """Match DRI by user id or email (handles Cognito vs DB id drift)."""
+    if not obj:
+        return False
+    if obj.get("dri_id") == user.get("id"):
+        return True
+    dri_id = obj.get("dri_id")
+    if not dri_id:
+        return False
+    dri = await db.users.find_one({"id": dri_id}, {"_id": 0, "email": 1})
+    user_email = (user.get("email") or "").strip().lower()
+    dri_email = (dri.get("email") or "").strip().lower() if dri else ""
+    return bool(user_email and dri_email and user_email == dri_email)
+
+
+def objective_member_ids(obj: dict) -> List[str]:
+    return [obj["dri_id"]] + list(obj.get("contributor_ids") or [])
+
+
+def can_set_rigor_questions(user: dict, obj: dict, target_user_id: str) -> bool:
+    if target_user_id == obj.get("dri_id"):
+        return False
+    if target_user_id not in obj.get("contributor_ids", []):
+        return False
+    return is_objective_dri(user, obj)
+
+
+async def can_set_assigned_goals(user: dict, obj: dict, target_user_id: str) -> bool:
+    if target_user_id not in objective_member_ids(obj):
+        return False
+    if user["role"] in ("admin", "manager"):
+        return True
+    if await user_is_dri_for_objective(user, obj):
+        if target_user_id == obj.get("dri_id"):
+            return False
+        return target_user_id in obj.get("contributor_ids", [])
+    return False
+
+
+async def can_set_rigor_questions_async(user: dict, obj: dict, target_user_id: str) -> bool:
+    if target_user_id == obj.get("dri_id"):
+        return False
+    if target_user_id not in obj.get("contributor_ids", []):
+        return False
+    return await user_is_dri_for_objective(user, obj)
+
+
+async def ensure_plan(target_user_id: str, objective_id: str) -> dict:
+    existing = await db.plans.find_one({"user_id": target_user_id, "objective_id": objective_id})
+    if existing:
+        return existing
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": target_user_id,
+        "objective_id": objective_id,
+        "mission_context": "",
+        "role_in_objective": "",
+        "ownership_metric": "",
+        "metric_current": "",
+        "metric_target": "",
+        "goals": [],
+        "assigned_goals": [],
+        "rigor_questions": [],
+        "key_bets": "",
+        "risks": "",
+        "kill_list": "",
+        "tasks": [],
+        "created_at": now_utc(),
+        "updated_at": now_utc(),
+    }
+    await db.plans.insert_one(doc)
+    return doc
+
+
+def build_assigned_goals(texts: List[str], user: dict) -> List[dict]:
+    role = user.get("role", "contributor")
+    goals = []
+    for t in texts:
+        text = (t or "").strip()
+        if not text:
+            continue
+        goals.append({
+            "id": str(uuid.uuid4()),
+            "text": text,
+            "completed": False,
+            "set_by": user["id"],
+            "set_by_role": role,
+            "created_at": now_utc(),
+        })
+        if len(goals) >= 3:
+            break
+    return goals
+
+
+def merge_assigned_goals(texts: List[str], existing: List, user: dict) -> List[dict]:
+    existing_goals = [g for g in (existing or []) if isinstance(g, dict)]
+    by_text = {g.get("text", ""): g for g in existing_goals}
+    merged = []
+    for i, raw in enumerate(texts):
+        text = (raw or "").strip()
+        if not text:
+            continue
+        prev = by_text.get(text) or (existing_goals[i] if i < len(existing_goals) else None)
+        if prev and prev.get("text") == text:
+            merged.append({**prev, "text": text})
+        else:
+            merged.append({
+                "id": str(uuid.uuid4()),
+                "text": text,
+                "completed": False,
+                "set_by": user["id"],
+                "set_by_role": user.get("role", "contributor"),
+                "created_at": now_utc(),
+            })
+        if len(merged) >= 3:
+            break
+    return merged
+
+
 # ============ BRUTE FORCE HELPERS ============
 async def is_locked_out(identifier: str) -> bool:
     if MAX_LOGIN_ATTEMPTS <= 0:
@@ -388,7 +656,8 @@ class ObjectiveCreate(BaseModel):
     current_value: str = ""
     target_value: str = ""
     contributor_ids: List[str] = []
-    rigor_questions: List[str] = []
+    parent_objective_id: Optional[str] = None
+    initial_assigned_goals: Optional[List[str]] = None
 
 
 class ObjectiveUpdate(BaseModel):
@@ -399,7 +668,16 @@ class ObjectiveUpdate(BaseModel):
     current_value: Optional[str] = None
     target_value: Optional[str] = None
     contributor_ids: Optional[List[str]] = None
+    parent_objective_id: Optional[str] = None
+
+
+class ObjectiveMemberConfig(BaseModel):
+    assigned_goals: Optional[List[str]] = None
     rigor_questions: Optional[List[str]] = None
+
+
+class GoalCompletionUpdate(BaseModel):
+    completed: bool
 
 
 class IndividualPlanPayload(BaseModel):
@@ -425,19 +703,50 @@ class WeeklyUpdatePayload(BaseModel):
     priority_shift: str = ""
 
 
+class GoalOutcomeEntry(BaseModel):
+    goal_text: str = ""
+    achievement: Literal["fully", "partially", "not_achieved", ""] = ""
+    actual_result: str = ""
+    biggest_difference: str = ""
+
+
 class IndividualReflectionPayload(BaseModel):
     objective_id: str
-    goal_outcomes: str = ""
-    contribution_to_objective: str = ""
+    goal_outcomes: List[GoalOutcomeEntry] = []
+    objective_succeeded: str = ""
+    my_contribution: str = ""
+    system_breaks: str = ""
     what_moved_metric: str = ""
+    quality_built_shipped: str = ""
+    quality_validation: str = ""
+    quality_edge_cases: str = ""
+    quality_what_would_break: str = ""
+    peer_reviewed: str = ""
+    peer_feedback: str = ""
+    peer_improved_after: str = ""
+    what_didnt_work: str = ""
+    biggest_wins: str = ""
+    where_fell_short: str = ""
+    key_learnings: str = ""
+    friction_bottlenecks: str = ""
+    should_change_next_cycle: str = ""
+    support_needed: str = ""
+    beyond_where: str = ""
+    beyond_what_did: str = ""
+    beyond_why_mattered: str = ""
+    beyond_what_changed: str = ""
+    ceo_slowing_down: str = ""
+    ceo_doesnt_matter: str = ""
+    ceo_over_under_invest: str = ""
+    rigor_answers: dict = {}
+    # legacy fields (read/write compat)
+    contribution_to_objective: str = ""
     wins: str = ""
     failures: str = ""
     learnings: str = ""
-    support_needed: str = ""
     bottlenecks: str = ""
     trajectory_change: str = ""
     ceo_question_response: str = ""
-    rigor_answers: dict = {}  # question -> answer
 
 
 class DRIReflectionPayload(BaseModel):
@@ -592,6 +901,15 @@ async def logout(response: Response):
     return {"ok": True}
 
 
+@api.get("/meta")
+async def api_meta():
+    """Public build info — use to confirm deployed backend version."""
+    return {
+        "version": "2026-05-sub-objectives",
+        "features": ["parent_objective_id", "dri_sub_objectives", "goal_rollup"],
+    }
+
+
 @api.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
     return user
@@ -647,6 +965,17 @@ async def list_manageable(user: dict = Depends(get_current_user)):
     users = await db.users.find({"id": {"$in": list(ids)}},
                                 {"_id": 0, "password_hash": 0}).to_list(500)
     return users
+
+
+@api.get("/users/reportees")
+async def list_reportees(manager_id: str, user: dict = Depends(get_current_user)):
+    """Direct reportees of a manager/DRI (for contributor selection on objectives)."""
+    if user["role"] not in ("admin", "manager") and user["id"] != manager_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return await db.users.find(
+        {"manager_id": manager_id},
+        {"_id": 0, "password_hash": 0},
+    ).to_list(500)
 
 
 @api.patch("/users/{user_id}")
@@ -706,7 +1035,7 @@ async def list_cycles(_: dict = Depends(get_current_user)):
 
 
 @api.post("/cycles")
-async def create_cycle(payload: FocusCycleCreate, _: dict = Depends(require_role("admin", "manager"))):
+async def create_cycle(payload: FocusCycleCreate, _: dict = Depends(require_role("admin"))):
     doc = {
         "id": str(uuid.uuid4()),
         "name": payload.name,
@@ -722,7 +1051,7 @@ async def create_cycle(payload: FocusCycleCreate, _: dict = Depends(require_role
 
 @api.patch("/cycles/{cycle_id}")
 @api.put("/cycles/{cycle_id}")
-async def update_cycle(cycle_id: str, payload: FocusCycleUpdate, _: dict = Depends(require_role("admin", "manager"))):
+async def update_cycle(cycle_id: str, payload: FocusCycleUpdate, _: dict = Depends(require_role("admin"))):
     await db.cycles.update_one({"id": cycle_id}, {"$set": {"status": payload.status}})
     c = await db.cycles.find_one({"id": cycle_id}, {"_id": 0})
     if not c:
@@ -732,12 +1061,27 @@ async def update_cycle(cycle_id: str, payload: FocusCycleUpdate, _: dict = Depen
 
 # ---------- OBJECTIVES ----------
 @api.get("/objectives")
-async def list_objectives(cycle_id: Optional[str] = None, user: dict = Depends(get_current_user)):
+async def list_objectives(
+    cycle_id: Optional[str] = None,
+    parent_objective_id: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
     q = {}
     if cycle_id:
         q["cycle_id"] = cycle_id
+    if parent_objective_id:
+        q["parent_objective_id"] = parent_objective_id
     objs = await db.objectives.find(q, {"_id": 0}).to_list(500)
-    return objs
+    enriched = []
+    for obj in objs:
+        item = dict(obj)
+        if not obj.get("parent_objective_id"):
+            rollup = await compute_parent_rollup(obj["id"])
+            if rollup:
+                item["rollup"] = rollup
+                item["rollup_progress"] = rollup["percent"]
+        enriched.append(item)
+    return enriched
 
 
 @api.get("/objectives/{objective_id}")
@@ -745,31 +1089,177 @@ async def get_objective(objective_id: str, _: dict = Depends(get_current_user)):
     obj = await db.objectives.find_one({"id": objective_id}, {"_id": 0})
     if not obj:
         raise HTTPException(status_code=404, detail="Objective not found")
-    return obj
+    return await enrich_objective(obj)
 
 
 @api.post("/objectives")
-async def create_objective(payload: ObjectiveCreate, _: dict = Depends(require_role("admin", "manager"))):
+async def create_objective(
+    payload: ObjectiveCreate,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+):
+    parent = None
+    if payload.parent_objective_id:
+        parent = await get_objective_or_404(payload.parent_objective_id)
+        await validate_child_objective_create(payload, user)
+        if user["role"] not in ("admin", "manager") and not await user_is_dri_for_objective(user, parent):
+            raise HTTPException(
+                status_code=403,
+                detail="You can only create team sub-objectives under objectives where you are the DRI",
+            )
+    elif user["role"] not in ("admin", "manager"):
+        raise HTTPException(
+            status_code=403,
+            detail="Only managers and admins can create top-level objectives",
+        )
+    await validate_contributors_for_dri(payload.dri_id, payload.contributor_ids)
+    initial_goals = payload.initial_assigned_goals
     doc = payload.model_dump()
+    doc.pop("initial_assigned_goals", None)
+    if not doc.get("parent_objective_id"):
+        doc["parent_objective_id"] = None
     doc["id"] = str(uuid.uuid4())
     doc["created_at"] = now_utc()
     await db.objectives.insert_one(doc)
     doc.pop("_id", None)
+    if initial_goals and payload.contributor_ids:
+        contributor_id = payload.contributor_ids[0]
+        plan = await ensure_plan(contributor_id, doc["id"])
+        goals = merge_assigned_goals(initial_goals, [], user)
+        await db.plans.update_one(
+            {"id": plan["id"]},
+            {"$set": {"assigned_goals": goals, "updated_at": now_utc()}},
+        )
+    if doc.get("parent_objective_id"):
+        await sync_parent_rollup(doc["parent_objective_id"])
+    background_tasks.add_task(
+        notify_objective_created,
+        db,
+        doc,
+        user,
+        FRONTEND_URL,
+        initial_goals,
+    )
     return doc
 
 
 @api.patch("/objectives/{objective_id}")
 @api.put("/objectives/{objective_id}")
-async def update_objective(objective_id: str, payload: ObjectiveUpdate, user: dict = Depends(get_current_user)):
+async def update_objective(
+    objective_id: str,
+    payload: ObjectiveUpdate,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+):
     obj = await db.objectives.find_one({"id": objective_id})
     if not obj:
         raise HTTPException(status_code=404, detail="Objective not found")
-    if user["role"] != "admin" and obj.get("dri_id") != user["id"]:
+    if user["role"] not in ("admin", "manager") and obj.get("dri_id") != user["id"]:
         raise HTTPException(status_code=403, detail="Forbidden")
+    previous = {k: obj.get(k) for k in (
+        "dri_id", "contributor_ids", "title", "description",
+        "success_metric", "current_value", "target_value",
+    )}
     updates = {k: v for k, v in payload.model_dump().items() if v is not None}
     if updates:
+        new_dri = updates.get("dri_id", obj.get("dri_id"))
+        new_contribs = updates.get("contributor_ids", obj.get("contributor_ids", []))
+        await validate_contributors_for_dri(new_dri, new_contribs)
         await db.objectives.update_one({"id": objective_id}, {"$set": updates})
-    return await db.objectives.find_one({"id": objective_id}, {"_id": 0})
+    updated = await db.objectives.find_one({"id": objective_id}, {"_id": 0})
+    if updates:
+        background_tasks.add_task(
+            notify_objective_updated,
+            db,
+            updated,
+            updates,
+            user,
+            FRONTEND_URL,
+            previous,
+        )
+    return updated
+
+
+@api.put("/objectives/{objective_id}/members/{member_user_id}/config")
+@api.patch("/objectives/{objective_id}/members/{member_user_id}/config")
+async def upsert_objective_member_config(
+    objective_id: str,
+    member_user_id: str,
+    payload: ObjectiveMemberConfig,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user),
+):
+    """Set assigned goals (manager/admin or DRI for contributors) and rigor questions (DRI for contributors)."""
+    obj = await get_objective_or_404(objective_id)
+    if payload.assigned_goals is None and payload.rigor_questions is None:
+        raise HTTPException(status_code=400, detail="No config fields provided")
+
+    plan = await ensure_plan(member_user_id, objective_id)
+    updates = {"updated_at": now_utc()}
+    merged_goals = None
+
+    if payload.assigned_goals is not None:
+        if not await can_set_assigned_goals(user, obj, member_user_id):
+            raise HTTPException(status_code=403, detail="Not authorized to set assigned goals for this member")
+        existing_goals = plan.get("assigned_goals") or []
+        merged_goals = merge_assigned_goals(payload.assigned_goals, existing_goals, user)
+        updates["assigned_goals"] = merged_goals
+
+    if payload.rigor_questions is not None:
+        if not await can_set_rigor_questions_async(user, obj, member_user_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Only the DRI can set rigor questions for contributors",
+            )
+        updates["rigor_questions"] = [q.strip() for q in payload.rigor_questions if q and q.strip()]
+
+    await db.plans.update_one({"id": plan["id"]}, {"$set": updates})
+    updated_plan = await db.plans.find_one({"id": plan["id"]}, {"_id": 0})
+    if merged_goals is not None:
+        background_tasks.add_task(
+            notify_goals_assigned,
+            db,
+            obj,
+            member_user_id,
+            merged_goals,
+            user,
+            FRONTEND_URL,
+        )
+    if obj.get("parent_objective_id"):
+        await sync_parent_rollup(obj["parent_objective_id"])
+    return updated_plan
+
+
+@api.patch("/objectives/{objective_id}/members/{member_user_id}/goals/{goal_id}")
+async def update_goal_completion(
+    objective_id: str,
+    member_user_id: str,
+    goal_id: str,
+    payload: GoalCompletionUpdate,
+    user: dict = Depends(get_current_user),
+):
+    obj = await get_objective_or_404(objective_id)
+    if not await can_toggle_goal_completion_async(user, obj, member_user_id):
+        raise HTTPException(status_code=403, detail="Not authorized to update goal completion")
+    plan = await ensure_plan(member_user_id, objective_id)
+    goals = plan.get("assigned_goals") or []
+    found = False
+    updated_goals = []
+    for g in goals:
+        if isinstance(g, dict) and g.get("id") == goal_id:
+            updated_goals.append({**g, "completed": payload.completed, "completed_at": now_utc() if payload.completed else None})
+            found = True
+        else:
+            updated_goals.append(g)
+    if not found:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    await db.plans.update_one(
+        {"id": plan["id"]},
+        {"$set": {"assigned_goals": updated_goals, "updated_at": now_utc()}},
+    )
+    if obj.get("parent_objective_id"):
+        await sync_parent_rollup(obj["parent_objective_id"])
+    return await db.plans.find_one({"id": plan["id"]}, {"_id": 0})
 
 
 # ---------- INDIVIDUAL PLANS ----------
@@ -781,9 +1271,13 @@ async def list_plans(objective_id: Optional[str] = None, user_id: Optional[str] 
         q["objective_id"] = objective_id
     if user_id:
         q["user_id"] = user_id
-    # Contributors see only their own unless manager/admin
     if user["role"] not in ("admin", "manager"):
-        q["user_id"] = user["id"]
+        if objective_id:
+            obj = await db.objectives.find_one({"id": objective_id}, {"_id": 0})
+            if not (obj and await user_is_dri_for_objective(user, obj)):
+                q["user_id"] = user_id or user["id"]
+        else:
+            q["user_id"] = user_id or user["id"]
     return await db.plans.find(q, {"_id": 0}).to_list(500)
 
 
@@ -799,13 +1293,16 @@ async def upsert_plan(payload: IndividualPlanPayload,
     doc["updated_at"] = now_utc()
     existing = await db.plans.find_one({"user_id": target_user_id, "objective_id": payload.objective_id})
     if existing:
-        # preserve tasks array on upsert
         doc["tasks"] = existing.get("tasks", [])
+        doc["assigned_goals"] = existing.get("assigned_goals", [])
+        doc["rigor_questions"] = existing.get("rigor_questions", [])
         await db.plans.update_one({"id": existing["id"]}, {"$set": doc})
         return await db.plans.find_one({"id": existing["id"]}, {"_id": 0})
     doc["id"] = str(uuid.uuid4())
     doc["created_at"] = now_utc()
     doc["tasks"] = []
+    doc["assigned_goals"] = []
+    doc["rigor_questions"] = []
     await db.plans.insert_one(doc)
     doc.pop("_id", None)
     return doc

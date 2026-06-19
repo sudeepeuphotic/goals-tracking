@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { api, formatApiError } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -15,23 +15,35 @@ function rigorList(plan) {
   return plan?.rigor_questions || [];
 }
 
+function defaultSelectedMember(members, user, userIsManagerOrAdmin, isDRI) {
+  if (!members.length) return "";
+  if (userIsManagerOrAdmin) {
+    return members[0]?.id || "";
+  }
+  if (isDRI) {
+    const firstContributor = members.find(m => m.isContributor);
+    return firstContributor?.id || members[0]?.id || "";
+  }
+  return members[0]?.id || "";
+}
+
 export default function ObjectiveMemberPanel({ objective, users, plans, onSaved }) {
   const { user } = useAuth();
   const userIsManagerOrAdmin = isManagerOrAdmin(user);
   const isDRI = objective.dri_id === user.id;
 
-  const members = [
+  const members = useMemo(() => [
     { id: objective.dri_id, label: "DRI", isContributor: false },
     ...(objective.contributor_ids || []).map(id => ({
       id,
       label: "Contributor",
       isContributor: true,
     })),
-  ];
+  ], [objective.dri_id, objective.contributor_ids]);
 
   const canManage = userIsManagerOrAdmin || isDRI;
 
-  const [selectedId, setSelectedId] = useState(members[0]?.id || "");
+  const [selectedId, setSelectedId] = useState("");
   const [assignedGoals, setAssignedGoals] = useState(["", "", ""]);
   const [rigorQuestions, setRigorQuestions] = useState([""]);
   const [saving, setSaving] = useState(false);
@@ -47,12 +59,19 @@ export default function ObjectiveMemberPanel({ objective, users, plans, onSaved 
   const canEditRigor = isDRI && selected?.isContributor;
 
   useEffect(() => {
-    if (!canManage || !members.length || !selectedId) return;
+    if (!canManage || !members.length) return;
+    setSelectedId(prev => (members.some(m => m.id === prev)
+      ? prev
+      : defaultSelectedMember(members, user, userIsManagerOrAdmin, isDRI)));
+  }, [canManage, members, user.id, userIsManagerOrAdmin, isDRI]);
+
+  useEffect(() => {
+    if (!selectedId) return;
     const texts = goalTexts(selectedPlan);
     setAssignedGoals([0, 1, 2].map(i => texts[i] || ""));
     const rq = rigorList(selectedPlan);
     setRigorQuestions(rq.length ? rq : [""]);
-  }, [canManage, members.length, selectedId, selectedPlan]);
+  }, [selectedId, selectedPlan]);
 
   if (!canManage || !members.length) return null;
 
@@ -61,17 +80,17 @@ export default function ObjectiveMemberPanel({ objective, users, plans, onSaved 
     try {
       const body = {};
       if (canEditAssigned) {
-        body.assigned_goals = assignedGoals.filter(g => g.trim());
+        body.assigned_goals = assignedGoals.map(g => (g || "").trim());
       }
       if (canEditRigor) {
-        body.rigor_questions = rigorQuestions.filter(q => q.trim());
+        body.rigor_questions = rigorQuestions.map(q => (q || "").trim()).filter(Boolean);
       }
       if (!Object.keys(body).length) {
         toast.error("Nothing to save for this member");
         return;
       }
       await api.put(`/objectives/${objective.id}/members/${selectedId}/config`, body);
-      toast.success("Member goals updated");
+      toast.success("Saved");
       onSaved?.();
     } catch (e) {
       toast.error(formatApiError(e));
@@ -81,13 +100,22 @@ export default function ObjectiveMemberPanel({ objective, users, plans, onSaved 
   };
 
   const userMap = Object.fromEntries(users.map(u => [u.id, u]));
+  const contributorCount = members.filter(m => m.isContributor).length;
 
   return (
     <section className="brutal-card p-5 mb-6" data-testid="member-goals-panel">
       <header className="mono-label">TEAM GOALS & RIGOR</header>
       <p className="text-sm text-[var(--ink-soft)] mt-1">
-        Managers set goals for the DRI and contributors. DRIs set contributor goals and rigor questions.
+        {userIsManagerOrAdmin
+          ? "Assign goals to the DRI and each contributor. DRIs can later update contributor goals and add rigor questions."
+          : "Set contributor goals and rigor questions. Select a contributor tab below — your own goals are set by your manager."}
       </p>
+
+      {isDRI && !userIsManagerOrAdmin && contributorCount === 0 && (
+        <p className="mt-3 text-sm text-[var(--ink-soft)] brutal-border p-3 bg-[#FFD600]/30">
+          No contributors on this objective yet. Ask your admin to add team members from the DRI&apos;s reporting line.
+        </p>
+      )}
 
       <div className="mt-4 flex flex-wrap gap-2">
         {members.map(m => (
@@ -107,13 +135,15 @@ export default function ObjectiveMemberPanel({ objective, users, plans, onSaved 
 
       {selected && !canEditAssigned && isDRI && !selected.isContributor && (
         <p className="mt-4 text-sm text-[var(--ink-soft)]">
-          Goals assigned to you by your manager cannot be edited here.
+          Your goals are assigned by your manager. Select a contributor tab to set their goals or rigor questions.
         </p>
       )}
 
       {canEditAssigned && (
         <div className="mt-4">
-          <Label className="mono-label">Assigned goals (max 3)</Label>
+          <Label className="mono-label">
+            {selected?.isContributor ? "Contributor goals (max 3)" : "DRI goals (max 3)"}
+          </Label>
           <div className="space-y-2 mt-2">
             {[0, 1, 2].map(i => (
               <Input

@@ -4,37 +4,17 @@ import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import EmptyState from "@/components/EmptyState";
+import IndividualReflectionForm from "@/components/IndividualReflectionForm";
 import { asArray } from "@/lib/safe";
+import { DRI_REFLECTION_FIELDS } from "@/lib/reflectionFields";
+import { normalizeIndividualReflection } from "@/lib/reflectionDefaults";
 
-const IND_FIELDS = [
-  ["goal_outcomes", "Goal outcomes — what happened on each goal?"],
-  ["contribution_to_objective", "Your contribution to the objective"],
-  ["what_moved_metric", "What moved the metric?"],
-  ["wins", "Wins"],
-  ["failures", "Failures"],
-  ["learnings", "Learnings"],
-  ["support_needed", "Support needed"],
-  ["bottlenecks", "Bottlenecks"],
-  ["trajectory_change", "Trajectory change"],
-  ["ceo_question_response", "CEO question"],
-];
-
-const DRI_FIELDS = [
-  ["actual_metrics", "Actual metrics at end of cycle"],
-  ["what_worked", "What worked"],
-  ["what_failed", "What failed"],
-  ["alignment_quality", "Alignment quality"],
-  ["execution_quality", "Execution quality"],
-  ["major_blockers", "Major blockers"],
-  ["what_should_change", "What should change next cycle"],
-  ["ceo_question_response", "CEO question"],
-];
+const DRI_FIELDS = DRI_REFLECTION_FIELDS;
 
 const REFLECTION_MODE = {
   INDIVIDUAL: "individual",
@@ -49,12 +29,13 @@ export default function Reflection() {
   const [driRef, setDriRef] = useState(null);
   const [myPlan, setMyPlan] = useState(null);
   const [mode, setMode] = useState(REFLECTION_MODE.INDIVIDUAL);
+  const [saving, setSaving] = useState(false);
 
   const load = async () => {
     const [ob, ir, dr, pl] = await Promise.all([
       api.get("/objectives"),
-      api.get("/reflections/individual").catch(()=>({data:[]})),
-      api.get("/reflections/dri").catch(()=>({data:[]})),
+      api.get("/reflections/individual").catch(() => ({ data: [] })),
+      api.get("/reflections/dri").catch(() => ({ data: [] })),
       api.get("/plans").catch(() => ({ data: [] })),
     ]);
     const objectivesData = asArray(ob.data);
@@ -71,13 +52,8 @@ export default function Reflection() {
     setMyPlan(plan || null);
     const rigorQs = plan?.rigor_questions || [];
     const ind = indData.find(r => r.objective_id === active.id && r.user_id === user.id);
-    setIndividual(ind || {
-      objective_id: active.id,
-      goal_outcomes: "", contribution_to_objective: "", what_moved_metric: "",
-      wins: "", failures: "", learnings: "", support_needed: "",
-      bottlenecks: "", trajectory_change: "", ceo_question_response: "",
-      rigor_answers: Object.fromEntries(rigorQs.map(q => [q, ""])),
-    });
+    setIndividual(normalizeIndividualReflection(ind, active.id, plan, rigorQs));
+
     if (active.dri_id === user.id) {
       const d = driData.find(r => r.objective_id === active.id);
       setDriRef(d || {
@@ -98,11 +74,14 @@ export default function Reflection() {
   const active = objectives.find(o => o.id === activeId);
 
   const saveIndividual = async () => {
+    setSaving(true);
     try {
       await api.post("/reflections/individual", individual);
       toast.success("Reflection saved");
     } catch (e) { toast.error(formatApiError(e)); }
+    finally { setSaving(false); }
   };
+
   const saveDri = async () => {
     try {
       await api.post("/reflections/dri", driRef);
@@ -110,7 +89,13 @@ export default function Reflection() {
     } catch (e) { toast.error(formatApiError(e)); }
   };
 
-  if (!objectives.length) return <div className="p-8"><EmptyState title="No reflections needed yet" hint="You're not on any objectives." /></div>;
+  if (!objectives.length) {
+    return (
+      <div className="p-8">
+        <EmptyState title="No reflections needed yet" hint="You're not on any objectives." />
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 md:p-8 max-w-[1000px] mx-auto">
@@ -120,7 +105,9 @@ export default function Reflection() {
       <div className="mt-6 flex flex-wrap items-center gap-3">
         <div className="mono-label">OBJECTIVE</div>
         <Select value={activeId} onValueChange={setActiveId}>
-          <SelectTrigger className="rounded-none border-black w-[360px]" data-testid="refl-objective-select"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="rounded-none border-black w-[360px]" data-testid="refl-objective-select">
+            <SelectValue />
+          </SelectTrigger>
           <SelectContent>
             {objectives.map(o => <SelectItem key={o.id} value={o.id}>{o.title}</SelectItem>)}
           </SelectContent>
@@ -134,35 +121,13 @@ export default function Reflection() {
       </div>
 
       {mode === REFLECTION_MODE.INDIVIDUAL && individual && (
-        <div className="mt-6 brutal-border border-r-0 border-b-0">
-          {IND_FIELDS.map(([k, label]) => (
-            <div key={k} className="p-5 brutal-border border-t-0 border-l-0 border-r-0 bg-white">
-              <Label className="mono-label">{label}</Label>
-              <Textarea className="rounded-none border-black mt-2" value={individual[k] || ""}
-                onChange={e => setIndividual({ ...individual, [k]: e.target.value })} data-testid={`refl-${k}`} />
-            </div>
-          ))}
-          {myPlan && (myPlan.rigor_questions || []).length > 0 && (
-            <div className="p-5 brutal-border border-t-0 border-l-0 border-r-0 bg-white">
-              <Label className="mono-label">Rigor questions (from your DRI)</Label>
-              <div className="mt-2 space-y-3">
-                {myPlan.rigor_questions.map((q, i) => (
-                  <div key={i}>
-                    <div className="text-sm font-medium">{q}</div>
-                    <Input className="rounded-none border-black mt-1"
-                      value={individual.rigor_answers?.[q] || ""}
-                      onChange={e => setIndividual({ ...individual,
-                        rigor_answers: { ...(individual.rigor_answers || {}), [q]: e.target.value } })}
-                      data-testid={`refl-rigor-${i}`} />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="p-5 brutal-border border-t-0 border-l-0 border-r-0 bg-[var(--surface-hover)] flex justify-end">
-            <Button onClick={saveIndividual} className="rounded-none bg-black text-white" data-testid="refl-save-individual">Save reflection →</Button>
-          </div>
-        </div>
+        <IndividualReflectionForm
+          reflection={individual}
+          myPlan={myPlan}
+          onChange={setIndividual}
+          onSave={saveIndividual}
+          saving={saving}
+        />
       )}
 
       {mode === REFLECTION_MODE.DRI && driRef && (

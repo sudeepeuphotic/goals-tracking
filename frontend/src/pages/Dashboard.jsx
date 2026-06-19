@@ -9,8 +9,11 @@ import { Button } from "@/components/ui/button";
 import AIPanel from "@/components/AIPanel";
 import GoalsProgressOverview from "@/components/GoalsProgressOverview";
 import GoalProgressBar from "@/components/GoalProgressBar";
+import ObjectiveMemberPanel from "@/components/ObjectiveMemberPanel";
+import AssignedGoalsChecklist from "@/components/AssignedGoalsChecklist";
 import { Bell } from "lucide-react";
-import { isManagerOrAdmin } from "@/lib/roles";
+import { isAdmin, isManagerOrAdmin } from "@/lib/roles";
+import { asArray } from "@/lib/safe";
 
 function currentWeekISO() {
   const d = new Date();
@@ -28,6 +31,8 @@ export default function Dashboard() {
   const [objectives, setObjectives] = useState([]);
   const [updates, setUpdates] = useState([]);
   const [plans, setPlans] = useState([]);
+  const [allUsers, setAllUsers] = useState([]);
+  const [driObjectivePlans, setDriObjectivePlans] = useState({});
   const [loading, setLoading] = useState(true);
 
   const load = async () => {
@@ -55,7 +60,19 @@ export default function Dashboard() {
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
-  const activeCycle = useMemo(() => cycles.find(c => c.status === "active") || cycles[0], [cycles]);
+  const activeCycle = useMemo(() => {
+    const explicit = cycles.find(c => c.status === "active");
+    const myObjectiveCycleIds = [...new Set(
+      objectives
+        .filter(o => o.dri_id === user.id || (o.contributor_ids || []).includes(user.id))
+        .map(o => o.cycle_id)
+    )];
+    if (explicit && myObjectiveCycleIds.includes(explicit.id)) return explicit;
+    if (myObjectiveCycleIds.length) {
+      return cycles.find(c => myObjectiveCycleIds.includes(c.id)) || explicit || cycles[0];
+    }
+    return explicit || cycles[0];
+  }, [cycles, objectives, user.id]);
   const myObjectives = useMemo(() => {
     if (!activeCycle) return [];
     return objectives.filter(o => o.cycle_id === activeCycle.id && (
@@ -65,7 +82,11 @@ export default function Dashboard() {
 
   const driObjectives = useMemo(() => {
     if (!activeCycle) return [];
-    return objectives.filter(o => o.cycle_id === activeCycle.id && o.dri_id === user.id);
+    return objectives.filter(o =>
+      o.cycle_id === activeCycle.id &&
+      o.dri_id === user.id &&
+      !o.parent_objective_id
+    );
   }, [objectives, activeCycle, user.id]);
 
   const currentObjective = myObjectives[0];
@@ -78,8 +99,37 @@ export default function Dashboard() {
     [myObjectives, updates, thisWeek]
   );
   const canSeeAI = isManagerOrAdmin(user);
-  const showTeamProgress = isManagerOrAdmin(user) && activeCycle;
-  const showDriProgress = driObjectives.length > 0 && activeCycle && !isManagerOrAdmin(user);
+  const showTeamProgress = isAdmin(user) && activeCycle;
+  const showDriProgress = driObjectives.length > 0 && activeCycle && !isAdmin(user);
+  const showDriTeamControls = driObjectives.length > 0;
+
+  const loadDriTeamData = async (objectivesToLoad = driObjectives) => {
+    if (!objectivesToLoad.length) {
+      setAllUsers([]);
+      setDriObjectivePlans({});
+      return;
+    }
+    try {
+      const [userRes, ...planRes] = await Promise.all([
+        api.get("/users"),
+        ...objectivesToLoad.map(o => api.get("/plans", { params: { objective_id: o.id } })),
+      ]);
+      setAllUsers(asArray(userRes.data));
+      const map = {};
+      objectivesToLoad.forEach((o, i) => {
+        map[o.id] = asArray(planRes[i].data);
+      });
+      setDriObjectivePlans(map);
+    } catch (_e) {
+      setAllUsers([]);
+      setDriObjectivePlans({});
+    }
+  };
+
+  useEffect(() => {
+    loadDriTeamData(driObjectives);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, [driObjectives.map(o => o.id).join(",")]);
 
   if (loading) return <div className="p-10 mono-label">Loading…</div>;
 
@@ -103,8 +153,26 @@ export default function Dashboard() {
       {showTeamProgress && <GoalsProgressOverview cycle={activeCycle} user={user} />}
       {showDriProgress && <GoalsProgressOverview cycle={activeCycle} user={user} />}
 
+      {showDriTeamControls && (
+        <div className="space-y-6 mb-8" data-testid="dri-team-controls">
+          {driObjectives.map(obj => (
+            <div key={obj.id}>
+              {driObjectives.length > 1 && (
+                <div className="mono-label mb-2">{obj.title}</div>
+              )}
+              <ObjectiveMemberPanel
+                objective={obj}
+                users={allUsers}
+                plans={driObjectivePlans[obj.id] || []}
+                onSaved={() => loadDriTeamData(driObjectives)}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
       {!currentObjective ? (
-        !showTeamProgress && !showDriProgress ? (
+        !showTeamProgress && !showDriProgress && !showDriTeamControls ? (
           <EmptyState title="No objectives yet" hint="Ask your admin to assign you as a DRI or contributor to an objective."
             action={<Button onClick={() => nav("/cycles")} className="rounded-none bg-black text-white" data-testid="go-cycles-btn">Go to cycles →</Button>} />
         ) : null
@@ -157,10 +225,12 @@ export default function Dashboard() {
                 {currentObjective.dri_id === user.id ? (
                   <GoalProgressBar
                     className="mt-3"
-                    label="Objective metric"
-                    metricName={currentObjective.success_metric}
-                    current={currentObjective.current_value}
-                    target={currentObjective.target_value}
+                    label={currentObjective.rollup_progress != null ? "Team rollup progress" : "Objective metric"}
+                    metricName={currentObjective.rollup_progress != null ? "From sub-objectives" : currentObjective.success_metric}
+                    current={currentObjective.rollup_progress != null
+                      ? String(currentObjective.rollup_progress)
+                      : currentObjective.current_value}
+                    target={currentObjective.rollup_progress != null ? "100" : currentObjective.target_value}
                   />
                 ) : (
                   <GoalProgressBar
@@ -185,6 +255,15 @@ export default function Dashboard() {
                       </div>
                     </div>
                   </div>
+                )}
+                {myPlan && (myPlan.assigned_goals || []).length > 0 && (
+                  <AssignedGoalsChecklist
+                    className="mt-5"
+                    objectiveId={currentObjective.id}
+                    plan={myPlan}
+                    canToggle={currentObjective.contributor_ids?.includes(user.id)}
+                    onUpdated={load}
+                  />
                 )}
               </div>
             </div>

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { asArray } from "@/lib/safe";
-import { isManagerOrAdmin } from "@/lib/roles";
+import { isAdmin } from "@/lib/roles";
 import GoalProgressBar from "@/components/GoalProgressBar";
 import StatusLight from "@/components/StatusLight";
 import { Button } from "@/components/ui/button";
@@ -45,50 +45,58 @@ export default function GoalsProgressOverview({ cycle, user }) {
   const nav = useNavigate();
   const [rows, setRows] = useState(null);
 
-  const showAllDris = isAdmin(user) || isManagerOrAdmin(user);
+  const showAllDris = isAdmin(user);
 
   useEffect(() => {
     if (!cycle) return;
+    let cancelled = false;
     (async () => {
-      const [objRes, userRes, upRes] = await Promise.all([
-        api.get("/objectives", { params: { cycle_id: cycle.id } }),
-        api.get("/users"),
-        api.get("/updates"),
-      ]);
-      const objectives = asArray(objRes.data);
-      const users = asArray(userRes.data);
-      const updates = asArray(upRes.data);
-      const userMap = Object.fromEntries(users.map(u => [u.id, u]));
+      try {
+        const [objRes, userRes, upRes] = await Promise.all([
+          api.get("/objectives", { params: { cycle_id: cycle.id } }),
+          api.get("/users"),
+          api.get("/updates"),
+        ]);
+        if (cancelled) return;
+        const objectives = asArray(objRes.data);
+        const users = asArray(userRes.data);
+        const updates = asArray(upRes.data);
+        const userMap = Object.fromEntries(users.map(u => [u.id, u]));
 
-      const relevantObjectives = showAllDris
-        ? objectives
-        : objectives.filter(o => o.dri_id === user.id);
+        const relevantObjectives = showAllDris
+          ? objectives.filter(o => !o.parent_objective_id)
+          : objectives.filter(o => o.dri_id === user.id && !o.parent_objective_id);
 
-      const planLists = await Promise.all(
-        relevantObjectives.map(o =>
-          api.get("/plans", { params: { objective_id: o.id } }).then(r => asArray(r.data))
-        )
-      );
+        const planLists = await Promise.all(
+          relevantObjectives.map(o =>
+            api.get("/plans", { params: { objective_id: o.id } }).then(r => asArray(r.data))
+          )
+        );
+        if (cancelled) return;
 
-      const result = relevantObjectives.map((o, idx) => {
-        const plans = planLists[idx] || [];
-        const planByUser = Object.fromEntries(plans.map(p => [p.user_id, p]));
-        const contribs = o.contributor_ids || [];
-        const latest = updates
-          .filter(u => u.objective_id === o.id)
-          .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""))[0];
+        const result = relevantObjectives.map((o, idx) => {
+          const plans = planLists[idx] || [];
+          const planByUser = Object.fromEntries(plans.map(p => [p.user_id, p]));
+          const contribs = o.contributor_ids || [];
+          const latest = updates
+            .filter(u => u.objective_id === o.id)
+            .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""))[0];
 
-        return {
-          obj: o,
-          dri: userMap[o.dri_id],
-          driPlan: planByUser[o.dri_id],
-          contributors: contribs.map(id => ({ user: userMap[id], plan: planByUser[id] })).filter(c => c.user),
-          latestStatus: latest?.status || null,
-        };
-      });
+          return {
+            obj: o,
+            dri: userMap[o.dri_id],
+            driPlan: planByUser[o.dri_id],
+            contributors: contribs.map(id => ({ user: userMap[id], plan: planByUser[id] })).filter(c => c.user),
+            latestStatus: latest?.status || null,
+          };
+        });
 
-      setRows(result);
+        setRows(result);
+      } catch (_e) {
+        if (!cancelled) setRows([]);
+      }
     })();
+    return () => { cancelled = true; };
   }, [cycle, user.id, showAllDris]);
 
   if (!cycle) return null;
@@ -108,6 +116,18 @@ export default function GoalsProgressOverview({ cycle, user }) {
           <Button onClick={() => nav("/cycles")} className="rounded-none bg-black text-white" data-testid="progress-manage-cycles">
             Manage cycles →
           </Button>
+        )}
+        {!showAllDris && (
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => nav("/cycles")} className="rounded-none bg-black text-white" data-testid="dri-new-objective">
+              New team objective →
+            </Button>
+            {rows && rows.length > 0 && (
+              <Button onClick={() => nav(`/objectives/${rows[0].obj.id}?tab=plans`)} variant="outline" className="rounded-none border-black" data-testid="dri-manage-goals">
+                Update team goals →
+              </Button>
+            )}
+          </div>
         )}
       </div>
 
@@ -136,10 +156,10 @@ export default function GoalsProgressOverview({ cycle, user }) {
             </div>
             <GoalProgressBar
               className="mt-3"
-              label="Objective metric"
-              metricName={r.obj.success_metric}
-              current={r.obj.current_value}
-              target={r.obj.target_value}
+              label={r.obj.rollup_progress != null ? "Team rollup" : "Objective metric"}
+              metricName={r.obj.rollup_progress != null ? "From sub-objectives" : r.obj.success_metric}
+              current={r.obj.rollup_progress != null ? String(r.obj.rollup_progress) : r.obj.current_value}
+              target={r.obj.rollup_progress != null ? "100" : r.obj.target_value}
             />
           </button>
 

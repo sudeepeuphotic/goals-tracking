@@ -163,9 +163,14 @@ def build_ai_router(db, require_role, get_current_user, now_utc):
         feedback = await db.feedback.find({"objective_id": objective_id},
                                           {"_id": 0, "user_id": 0}).to_list(500)
         updates = await db.updates.find({"objective_id": objective_id}, {"_id": 0}).to_list(500)
+        contributor_plans = await db.plans.find(
+            {"objective_id": objective_id, "user_id": {"$in": obj.get("contributor_ids", [])}},
+            {"_id": 0, "user_id": 1, "rigor_questions": 1, "assigned_goals": 1},
+        ).to_list(500)
         payload = {
             "objective": {k: obj.get(k) for k in ["title", "description", "success_metric",
-                                                  "current_value", "target_value", "rigor_questions"]},
+                                                  "current_value", "target_value"]},
+            "contributor_plans": contributor_plans,
             "dri": {"name": dri["name"] if dri else "", "role": dri["role"] if dri else ""},
             "dri_reflection": dri_refl, "team_feedback": feedback, "weekly_updates": updates,
         }

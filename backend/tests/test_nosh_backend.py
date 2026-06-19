@@ -182,6 +182,8 @@ def test_list_objectives_by_cycle(alice, seeded_cycle):
 def test_create_objective_admin(admin, seeded_cycle, users_by_email):
     dri_id = users_by_email["dri@noshrobotics.co"]["id"]
     alice_id = users_by_email["alice@noshrobotics.co"]["id"]
+    # Contributors must be direct reportees of the DRI
+    admin.patch(f"{API}/users/{alice_id}", json={"manager_id": dri_id}, timeout=20)
     payload = {
         "cycle_id": seeded_cycle["id"],
         "title": f"TEST_obj_{uuid.uuid4().hex[:6]}",
@@ -191,7 +193,6 @@ def test_create_objective_admin(admin, seeded_cycle, users_by_email):
         "current_value": "0",
         "target_value": "100",
         "contributor_ids": [alice_id],
-        "rigor_questions": ["q1?"],
     }
     r = admin.post(f"{API}/objectives", json=payload, timeout=20)
     assert r.status_code == 200, r.text
@@ -203,11 +204,170 @@ def test_create_objective_admin(admin, seeded_cycle, users_by_email):
     assert r2.json()["dri_id"] == dri_id
 
 
+def test_create_objective_rejects_non_reportee_contributor(admin, seeded_cycle, users_by_email):
+    dri_id = users_by_email["dri@noshrobotics.co"]["id"]
+    bob_id = users_by_email["bob@noshrobotics.co"]["id"]
+    r = admin.post(f"{API}/objectives", json={
+        "cycle_id": seeded_cycle["id"],
+        "title": f"TEST_bad_{uuid.uuid4().hex[:6]}",
+        "description": "test",
+        "dri_id": dri_id,
+        "success_metric": "m",
+        "contributor_ids": [bob_id],
+    }, timeout=20)
+    assert r.status_code == 400
+
+
+def test_member_config_rigor_and_goals(admin, dri, seeded_objectives, users_by_email):
+    obj = seeded_objectives[0]
+    alice_id = users_by_email["alice@noshrobotics.co"]["id"]
+    admin.patch(f"{API}/users/{alice_id}", json={"manager_id": obj["dri_id"]}, timeout=20)
+    if alice_id not in obj.get("contributor_ids", []):
+        admin.patch(f"{API}/objectives/{obj['id']}", json={"contributor_ids": [alice_id]}, timeout=20)
+
+    r_mgr = admin.put(f"{API}/objectives/{obj['id']}/members/{alice_id}/config", json={
+        "assigned_goals": ["Ship feature X"],
+    }, timeout=20)
+    assert r_mgr.status_code == 200, r_mgr.text
+    assert len(r_mgr.json().get("assigned_goals", [])) == 1
+
+    r_dri = dri.put(f"{API}/objectives/{obj['id']}/members/{alice_id}/config", json={
+        "rigor_questions": ["What blocked you?"],
+        "assigned_goals": ["Ship feature X", "Improve metric Y"],
+    }, timeout=20)
+    assert r_dri.status_code == 200, r_dri.text
+    assert r_dri.json().get("rigor_questions") == ["What blocked you?"]
+
+    r_forbid = dri.put(f"{API}/objectives/{obj['id']}/members/{obj['dri_id']}/config", json={
+        "assigned_goals": ["DRI goal"],
+    }, timeout=20)
+    assert r_forbid.status_code == 403
+
+
 def test_create_objective_forbidden_for_contributor(alice, seeded_cycle, users_by_email):
     r = alice.post(f"{API}/objectives",
                    json={"cycle_id": seeded_cycle["id"], "title": "x", "description": "x",
                          "dri_id": users_by_email["dri@noshrobotics.co"]["id"], "success_metric": "m"},
                    timeout=20)
+    assert r.status_code == 403
+
+
+def test_create_objective_dri_for_own_team(dri, admin, seeded_cycle, users_by_email):
+    alice_id = users_by_email["alice@noshrobotics.co"]["id"]
+    dri_id = users_by_email["dri@noshrobotics.co"]["id"]
+    admin.patch(f"{API}/users/{alice_id}", json={"manager_id": dri_id}, timeout=20)
+    parent = admin.post(f"{API}/objectives", json={
+        "cycle_id": seeded_cycle["id"],
+        "title": f"TEST_parent_{uuid.uuid4().hex[:6]}",
+        "description": "parent objective",
+        "dri_id": dri_id,
+        "success_metric": "metric",
+        "contributor_ids": [],
+    }, timeout=20)
+    assert parent.status_code == 200, parent.text
+    parent_id = parent.json()["id"]
+    payload = {
+        "cycle_id": seeded_cycle["id"],
+        "parent_objective_id": parent_id,
+        "title": f"TEST_dri_obj_{uuid.uuid4().hex[:6]}",
+        "description": "dri created sub-objective",
+        "dri_id": dri_id,
+        "success_metric": "metric",
+        "contributor_ids": [alice_id],
+    }
+    r = dri.post(f"{API}/objectives", json=payload, timeout=20)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["dri_id"] == dri_id
+    assert data["parent_objective_id"] == parent_id
+    assert alice_id in data["contributor_ids"]
+
+
+def test_create_objective_dri_requires_parent(dri, seeded_cycle, users_by_email):
+    dri_id = users_by_email["dri@noshrobotics.co"]["id"]
+    alice_id = users_by_email["alice@noshrobotics.co"]["id"]
+    r = dri.post(f"{API}/objectives", json={
+        "cycle_id": seeded_cycle["id"],
+        "title": f"TEST_dri_orphan_{uuid.uuid4().hex[:6]}",
+        "description": "no parent",
+        "dri_id": dri_id,
+        "success_metric": "m",
+        "contributor_ids": [alice_id],
+    }, timeout=20)
+    assert r.status_code == 400
+
+
+def test_goal_completion_rollup(dri, admin, alice, seeded_cycle, users_by_email):
+    alice_id = users_by_email["alice@noshrobotics.co"]["id"]
+    dri_id = users_by_email["dri@noshrobotics.co"]["id"]
+    admin.patch(f"{API}/users/{alice_id}", json={"manager_id": dri_id}, timeout=20)
+    parent = admin.post(f"{API}/objectives", json={
+        "cycle_id": seeded_cycle["id"],
+        "title": f"TEST_rollup_parent_{uuid.uuid4().hex[:6]}",
+        "description": "parent",
+        "dri_id": dri_id,
+        "success_metric": "metric",
+        "contributor_ids": [],
+    }, timeout=20).json()
+    child = dri.post(f"{API}/objectives", json={
+        "cycle_id": seeded_cycle["id"],
+        "parent_objective_id": parent["id"],
+        "title": f"TEST_rollup_child_{uuid.uuid4().hex[:6]}",
+        "description": "child",
+        "dri_id": dri_id,
+        "success_metric": "metric",
+        "contributor_ids": [alice_id],
+    }, timeout=20).json()
+    cfg = dri.put(f"{API}/objectives/{child['id']}/members/{alice_id}/config", json={
+        "assigned_goals": ["Goal A", "Goal B"],
+    }, timeout=20)
+    assert cfg.status_code == 200, cfg.text
+    goals = cfg.json().get("assigned_goals", [])
+    assert len(goals) == 2
+    goal_id = goals[0]["id"]
+    done = alice.patch(
+        f"{API}/objectives/{child['id']}/members/{alice_id}/goals/{goal_id}",
+        json={"completed": True},
+        timeout=20,
+    )
+    assert done.status_code == 200, done.text
+    parent_get = admin.get(f"{API}/objectives/{parent['id']}", timeout=20).json()
+    assert parent_get.get("rollup_progress") == 50
+
+
+def test_create_objective_dri_requires_contributors(dri, admin, seeded_cycle, users_by_email):
+    dri_id = users_by_email["dri@noshrobotics.co"]["id"]
+    parent = admin.post(f"{API}/objectives", json={
+        "cycle_id": seeded_cycle["id"],
+        "title": f"TEST_parent2_{uuid.uuid4().hex[:6]}",
+        "description": "parent",
+        "dri_id": dri_id,
+        "success_metric": "m",
+        "contributor_ids": [],
+    }, timeout=20).json()
+    r = dri.post(f"{API}/objectives", json={
+        "cycle_id": seeded_cycle["id"],
+        "parent_objective_id": parent["id"],
+        "title": f"TEST_dri_solo_{uuid.uuid4().hex[:6]}",
+        "description": "no contributors",
+        "dri_id": dri_id,
+        "success_metric": "m",
+        "contributor_ids": [],
+    }, timeout=20)
+    assert r.status_code == 400
+
+
+def test_create_objective_dri_cannot_assign_other_dri(dri, seeded_cycle, users_by_email):
+    manager_id = users_by_email["manager@noshrobotics.co"]["id"]
+    alice_id = users_by_email["alice@noshrobotics.co"]["id"]
+    r = dri.post(f"{API}/objectives", json={
+        "cycle_id": seeded_cycle["id"],
+        "title": f"TEST_dri_bad_{uuid.uuid4().hex[:6]}",
+        "description": "wrong dri",
+        "dri_id": manager_id,
+        "success_metric": "m",
+        "contributor_ids": [alice_id],
+    }, timeout=20)
     assert r.status_code == 403
 
 
@@ -267,16 +427,26 @@ def test_weekly_update_rejects_invalid_status(alice, seeded_objectives):
 # ---------- Reflections ----------
 def test_individual_reflection_upsert(alice, seeded_objectives):
     obj = seeded_objectives[0]
-    payload = {"objective_id": obj["id"], "wins": "TEST wins", "learnings": "TEST learnings"}
+    payload = {
+        "objective_id": obj["id"],
+        "biggest_wins": "TEST wins",
+        "key_learnings": "TEST learnings",
+        "goal_outcomes": [{
+            "goal_text": "Ship feature",
+            "achievement": "fully",
+            "actual_result": "Done",
+            "biggest_difference": "Focus",
+        }],
+    }
     r = alice.post(f"{API}/reflections/individual", json=payload, timeout=20)
     assert r.status_code == 200
     rid = r.json()["id"]
-    # upsert
-    payload["wins"] = "TEST wins v2"
+    payload["biggest_wins"] = "TEST wins v2"
     r2 = alice.post(f"{API}/reflections/individual", json=payload, timeout=20)
     assert r2.status_code == 200
     assert r2.json()["id"] == rid
-    assert r2.json()["wins"] == "TEST wins v2"
+    assert r2.json()["biggest_wins"] == "TEST wins v2"
+    assert r2.json()["goal_outcomes"][0]["achievement"] == "fully"
 
 
 def test_dri_reflection_only_dri_can_submit(dri, alice, seeded_objectives):

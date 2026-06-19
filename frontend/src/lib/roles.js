@@ -20,3 +20,11 @@ export function isManager(user) {
 export function isManagerOrAdmin(user) {
   return isAdmin(user) || isManager(user);
 }
+
+export function isDri(user) {
+  return roleOf(user) === ROLE.DRI;
+}
+
+export function canCreateObjective(user) {
+  return isManagerOrAdmin(user) || isDri(user);
+}

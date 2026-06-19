@@ -143,11 +143,12 @@ export default function ManagerReview() {
               <div className="brutal-card p-5">
                 <div className="mono-label">REFLECTIONS</div>
                 {indRefls.length ? indRefls.map(r => (
-                  <div key={r.id} className="mt-3 text-sm">
-                    <div className="font-medium">{objectives.find(o=>o.id===r.objective_id)?.title}</div>
-                    <div className="text-[var(--ink-soft)] text-xs mt-1">Wins: {r.wins || "—"}</div>
-                    <div className="text-[var(--ink-soft)] text-xs">Failures: {r.failures || "—"}</div>
-                    <div className="text-[var(--ink-soft)] text-xs">Learnings: {r.learnings || "—"}</div>
+                  <div key={r.id} className="mt-3 text-sm space-y-1">
+                    <div className="font-medium">{objectives.find(o => o.id === r.objective_id)?.title}</div>
+                    <div className="text-[var(--ink-soft)] text-xs">Wins: {r.biggest_wins || r.wins || "—"}</div>
+                    <div className="text-[var(--ink-soft)] text-xs">Fell short: {r.where_fell_short || r.failures || "—"}</div>
+                    <div className="text-[var(--ink-soft)] text-xs">Learnings: {r.key_learnings || r.learnings || "—"}</div>
+                    <div className="text-[var(--ink-soft)] text-xs">Support: {r.support_needed || "—"}</div>
                   </div>
                 )) : <div className="text-sm text-[var(--ink-soft)] mt-2">No reflection yet.</div>}
               </div>
